@@ -46,7 +46,7 @@
 #   ┌──────────────────────┐
 #   │  Producer (Thread)   │  ← extrae y publica en Kafka con delay
 #   └──────────┬───────────┘
-#              │ Produce (JSON)
+#              │ Produce (JSON, esquema bronze completo)
 #       ┌──────┴──────┐
 #       ▼             ▼
 #   [equipos]    [partidos]   ← tópicos en Kafka (Aiven cloud)
@@ -54,17 +54,29 @@
 #       └──────┬──────┘
 #              ▼
 #   ┌──────────────────────┐
-#   │  Consumer (Thread)   │  ← lee y muestra los mensajes en tiempo real
+#   │  Consumer (Thread)   │  ← lee los mensajes en tiempo real
+#   └──────────┬───────────┘
+#              │ micro-batch + MERGE por id
+#              ▼
+#   ┌──────────────────────┐
+#   │  Delta Lake (bronze) │  ← MISMA tabla que alimenta el batch
 #   └──────────────────────┘
 #
 # FLUJO DE DATOS
 # --------------
 # 1. El Producer consulta los endpoints de TheSportsDB (equipos y partidos).
-# 2. Cada registro se serializa como JSON y se publica en Kafka mensaje a
-#    mensaje con una pequeña pausa, simulando un flujo en tiempo real.
-# 3. El Consumer corre en paralelo (hilo separado) y lee los mensajes
-#    a medida que llegan, imprimiéndolos por consola.
-# 4. Ambos hilos se sincronizan: el Consumer se detiene automáticamente
+#    NOTA: la API entrega la temporada completa de una sola vez, así que el
+#    "tiempo real" se SIMULA reproduciendo los registros mensaje a mensaje
+#    con una pequeña pausa. No es un stream de eventos genuino (la fuente no
+#    lo ofrece), pero el mecanismo de ingesta streaming sí es real.
+# 2. Cada registro se serializa como JSON con el esquema completo de bronze
+#    (bronze/mappers.py) y se publica en Kafka.
+# 3. El Consumer corre en paralelo (hilo separado), lee los mensajes a medida
+#    que llegan, los muestra y los entrega al sink (streaming/sink.py).
+# 4. El sink los persiste en la MISMA capa bronze que el batch, en micro-batches
+#    y con MERGE por id (idempotente). Así bronze recibe de dos fuentes —API
+#    batch + stream Kafka— y silver/gold no cambian.
+# 5. Ambos hilos se sincronizan: el Consumer se detiene automáticamente
 #    cuando el Producer termina de enviar todos los mensajes.
 #
 # AUTENTICACIÓN CON AIVEN
@@ -80,22 +92,16 @@
 #
 # =============================================================================
 
-import subprocess
-import sys
-
-def instalar_dependencias():
-    paquetes = ["confluent-kafka", "requests", "python-dotenv"]
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet"] + paquetes)
-
-instalar_dependencias()
-
-# IMPORTACIONES (después de instalar dependencias)
+# Dependencias declaradas en requirements.txt.
+# Instalar antes de correr:  python -m pip install -r requirements.txt
 
 import json
 import os
 import time
 import logging
 import threading
+from datetime import datetime, timezone
+
 from confluent_kafka import Producer, Consumer, KafkaError
 from confluent_kafka.admin import AdminClient, NewTopic
 from dotenv import load_dotenv
@@ -114,7 +120,12 @@ if _faltantes:
         f"Faltan variables en el archivo .env: {', '.join(_faltantes)}"
     )
 
-from config import URL_BASE, LIGA_NOMBRE as LIGA, LIGA_ID, TEMPORADA
+from config import (
+    URL_BASE, LIGA_NOMBRE as LIGA, LIGA_ID, TEMPORADA,
+    DIR_EQUIPOS_BRONZE, DIR_PARTIDOS_BRONZE,
+)
+from bronze.mappers import mapear_equipo, mapear_partido
+from streaming.sink import BronzeSink
 from utils.api import obtener_datos_api
 
 logging.basicConfig(
@@ -195,34 +206,15 @@ def obtener_partidos(liga_id: str, temporada: str) -> list:
     return _obtener_registros("/eventsseason.php", {"id": liga_id, "s": temporada}, "events", "Partidos")
 
 # SERIALIZACIÓN
+#
+# Se usa el mapeo canónico de bronze (bronze/mappers.py): los mensajes viajan
+# con el esquema COMPLETO de la tabla bronze, de modo que el consumer pueda
+# persistirlos en la misma tabla que el batch sin divergencias de esquema.
 
-def serializar_equipo(equipo: dict) -> dict:
-    """Extrae los campos relevantes de un equipo y los estructura como dict."""
-    return {
-        "id_equipo":         equipo.get("idTeam"),
-        "nombre":            equipo.get("strTeam"),
-        "pais":              equipo.get("strCountry"),
-        "ciudad":            equipo.get("strCity") or equipo.get("strStadiumLocation"),
-        "estadio":           equipo.get("strStadium"),
-        "capacidad_estadio": equipo.get("intStadiumCapacity"),
-        "anio_fundacion":    equipo.get("intFormedYear"),
-        "liga":              equipo.get("strLeague"),
-    }
-
-
-def serializar_partido(partido: dict) -> dict:
-    """Extrae los campos relevantes de un partido y los estructura como dict."""
-    return {
-        "id_evento":        partido.get("idEvent"),
-        "equipo_local":     partido.get("strHomeTeam"),
-        "equipo_visitante": partido.get("strAwayTeam"),
-        "goles_local":      partido.get("intHomeScore"),
-        "goles_visitante":  partido.get("intAwayScore"),
-        "fecha_partido":    partido.get("dateEvent"),
-        "estado":           partido.get("strStatus"),
-        "estadio":          partido.get("strVenue"),
-        "temporada":        partido.get("strSeason"),
-    }
+def _timestamp_actual() -> tuple[str, str]:
+    """Retorna (timestamp_ISO, fecha_YYYY-MM-DD) en UTC para el envío."""
+    ahora = datetime.now(timezone.utc)
+    return ahora.isoformat(), ahora.strftime("%Y-%m-%d")
 
 # 
 # PRODUCER
@@ -274,8 +266,12 @@ def ejecutar_producer(evento_fin: threading.Event) -> None:
     equipos  = obtener_equipos(LIGA)
     partidos = obtener_partidos(LIGA_ID, TEMPORADA)
 
-    producir_mensajes(producer, TOPICO_EQUIPOS,  equipos,  serializar_equipo,  "id_equipo")
-    producir_mensajes(producer, TOPICO_PARTIDOS, partidos, serializar_partido, "id_evento")
+    timestamp, fecha_extraccion = _timestamp_actual()
+    ser_equipo  = lambda raw: mapear_equipo(raw, timestamp)
+    ser_partido = lambda raw: mapear_partido(raw, timestamp, fecha_extraccion)
+
+    producir_mensajes(producer, TOPICO_EQUIPOS,  equipos,  ser_equipo,  "id_equipo")
+    producir_mensajes(producer, TOPICO_PARTIDOS, partidos, ser_partido, "id_evento")
 
     logger.info("[PRODUCER] Todos los mensajes enviados correctamente.")
     evento_fin.set()  # señal para que el consumer se detenga
@@ -300,8 +296,17 @@ def mostrar_mensaje(topico: str, datos: dict) -> None:
         logger.warning("[CONSUMER] Mensaje de tópico desconocido: '%s'", topico)
 
 
-def ejecutar_consumer(evento_fin: threading.Event, evento_suscripto: threading.Event) -> None:
-    """Lee mensajes de Kafka hasta que el Producer señale que terminó y no queden mensajes."""
+def ejecutar_consumer(
+    evento_fin: threading.Event,
+    evento_suscripto: threading.Event,
+    sink: BronzeSink,
+) -> None:
+    """Lee mensajes de Kafka y los persiste en bronze vía el sink.
+
+    Corre hasta que el Producer señale que terminó y no queden mensajes.
+    Cada mensaje se muestra por consola (feedback) y se entrega al sink,
+    que lo escribe a la capa bronze en micro-batches.
+    """
     consumer = Consumer(KAFKA_CONSUMER_CONFIG)
     consumer.subscribe([TOPICO_EQUIPOS, TOPICO_PARTIDOS])
     evento_suscripto.set()  # avisa al pipeline que ya está listo para recibir
@@ -323,9 +328,11 @@ def ejecutar_consumer(evento_fin: threading.Event, evento_suscripto: threading.E
             try:
                 datos = json.loads(msg.value().decode("utf-8"))
                 mostrar_mensaje(msg.topic(), datos)
+                sink.agregar(msg.topic(), datos)  # persiste a bronze (micro-batch)
             except json.JSONDecodeError as e:
                 logger.warning("[CONSUMER] No se pudo parsear mensaje: %s", e)
     finally:
+        sink.cerrar()      # vacía los buffers pendientes antes de salir
         consumer.close()
         logger.info("[CONSUMER] Cerrado correctamente.")
 
@@ -337,11 +344,19 @@ def ejecutar_pipeline() -> None:
 
     crear_topicos_si_no_existen([TOPICO_EQUIPOS, TOPICO_PARTIDOS])
 
+    # Sink que persiste el stream en la MISMA capa bronze que el batch.
+    sink = BronzeSink(
+        ruta_equipos=DIR_EQUIPOS_BRONZE,
+        ruta_partidos=DIR_PARTIDOS_BRONZE,
+        topico_equipos=TOPICO_EQUIPOS,
+        topico_partidos=TOPICO_PARTIDOS,
+    )
+
     evento_fin       = threading.Event()
     evento_suscripto = threading.Event()
 
     hilo_consumer = threading.Thread(
-        target=ejecutar_consumer, args=(evento_fin, evento_suscripto), name="Consumer"
+        target=ejecutar_consumer, args=(evento_fin, evento_suscripto, sink), name="Consumer"
     )
     hilo_producer = threading.Thread(
         target=ejecutar_producer, args=(evento_fin,), name="Producer"

@@ -61,20 +61,13 @@
 #   pipelines/gold_pipeline.py
 # =============================================================================
 
-import subprocess
-import sys
+# Dependencias declaradas en requirements.txt.
+# Instalar antes de correr:  python -m pip install -r requirements.txt
+#
+# El pipeline se ejecuta orquestado con Prefect (ver pipelines/flow.py):
+# tareas con reintentos, dependencias explícitas y observabilidad.
 
-def _instalar_dependencias() -> None:
-    paquetes = ["requests", "pandas", "deltalake", "pyarrow", "python-dotenv"]
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "--quiet"] + paquetes
-    )
-
-_instalar_dependencias()
-
-from pipelines import bronze_pipeline, silver_pipeline, gold_pipeline
+from pipelines.flow import pipeline_medallion
 
 if __name__ == "__main__":
-    bronze_pipeline.ejecutar()
-    silver_pipeline.ejecutar()
-    gold_pipeline.ejecutar()
+    pipeline_medallion()

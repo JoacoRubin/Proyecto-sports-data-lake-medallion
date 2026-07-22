@@ -13,6 +13,8 @@
 import numpy as np
 import pandas as pd
 
+from bronze.mappers import ESTADOS_FINALIZADOS
+
 
 def deduplicar_partidos(df: pd.DataFrame) -> pd.DataFrame:
     """T1 — Deduplicación.
@@ -37,7 +39,8 @@ def manejar_nulos_partidos(df: pd.DataFrame) -> pd.DataFrame:
     partidos válidos.
     """
     df = df.dropna(subset=["id_evento", "goles_local", "goles_visitante"])
-    df = df[df["estado"].str.contains("Finished", case=False, na=False)].copy()
+    estado_norm = df["estado"].str.strip().str.upper()
+    df = df[estado_norm.isin(ESTADOS_FINALIZADOS)].copy()
     df["estadio"]   = df["estadio"].fillna("Estadio desconocido")
     df["temporada"] = df["temporada"].fillna("Sin temporada")
     return df.reset_index(drop=True)

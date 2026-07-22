@@ -1,0 +1,24 @@
+# =============================================================================
+# Dependencias del DASHBOARD + pipeline batch. Es lo que instala Streamlit
+# Community Cloud (build liviano y confiable).
+#
+# NO incluye orquestación (prefect) ni streaming (confluent-kafka): esas viven
+# en requirements-orchestration.txt y requirements-streaming.txt.
+#
+# Instalar:  python -m pip install -r requirements.txt
+# =============================================================================
+
+# Procesamiento y data lake
+pandas==3.0.0
+deltalake==1.4.2
+pyarrow==23.0.1
+numpy==2.4.1
+requests==2.32.5
+python-dotenv==1.2.2
+
+# Calidad de datos / contratos entre capas
+pandera==0.32.1
+
+# Dashboard / visualización
+streamlit==1.41.1
+plotly==5.24.1

@@ -8,6 +8,9 @@ from config import (
     DIR_EQUIPOS_BRONZE, DIR_PARTIDOS_BRONZE,
     DIR_PARTIDOS_SILVER,
 )
+from quality.contracts import (
+    validar_silver_partidos, verificar_silver_no_vacio_si_habia_finalizados,
+)
 from silver.transformations import manejar_nulos_equipos, procesar_partidos
 from utils.delta import leer_tabla_delta, merge_en_delta, mostrar_resumen_tabla
 
@@ -32,6 +35,11 @@ def ejecutar() -> None:
     df_equipos_silver  = manejar_nulos_equipos(df_equipos_bronze)
     df_partidos_silver = procesar_partidos(df_partidos_bronze, df_equipos_silver)
     logger.info("      Partidos procesados: %d", len(df_partidos_silver))
+
+    logger.info("[2.5/3] Validando contrato de calidad de silver...")
+    verificar_silver_no_vacio_si_habia_finalizados(df_partidos_bronze, df_partidos_silver)
+    validar_silver_partidos(df_partidos_silver)
+    logger.info("      Contrato silver OK.")
 
     logger.info("[3/3] Guardando en silver (MERGE por id_evento, partición por temporada)...")
     merge_en_delta(

@@ -4,6 +4,9 @@ ca.pem
 service.cert
 service.key
 
+# Secrets de Streamlit (nunca subir a git)
+.streamlit/secrets.toml
+
 # Data Lake generado (bronze, silver, gold)
 data/
 

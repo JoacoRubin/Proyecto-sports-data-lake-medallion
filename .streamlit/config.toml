@@ -1,0 +1,12 @@
+# Configuración de Streamlit (tema y servidor).
+# Aplica tanto en local como en Streamlit Community Cloud.
+
+[theme]
+base = "dark"
+primaryColor = "#4EA1FF"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#1A1D24"
+textColor = "#FAFAFA"
+
+[browser]
+gatherUsageStats = false

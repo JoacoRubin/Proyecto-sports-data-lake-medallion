@@ -1,0 +1,11 @@
+# =============================================================================
+# Orquestación del pipeline con Prefect (Camino B).
+# Necesario para correr el flow: python -m pipelines.flow
+#                            o:  python JoaquinRubinstein_TP2.py
+#
+# Instalar:  python -m pip install -r requirements-orchestration.txt
+# =============================================================================
+
+-r requirements.txt
+
+prefect==3.7.8

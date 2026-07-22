@@ -1,0 +1,10 @@
+# =============================================================================
+# Streaming con Kafka (extra local): producer_thesportsdb.py.
+# Requiere el broker Aiven configurado en .env. No se usa en el deploy.
+#
+# Instalar:  python -m pip install -r requirements-streaming.txt
+# =============================================================================
+
+-r requirements.txt
+
+confluent-kafka==2.14.0
