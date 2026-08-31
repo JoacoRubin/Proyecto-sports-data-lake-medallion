@@ -11,6 +11,20 @@
 
 import pandas as pd
 
+# Columnas por las que se agrupa, ademas del equipo.
+#
+# `fuente` entra porque el data lake es multi-fuente y los nombres de equipo NO
+# estan reconciliados entre fuentes: "Man United" y "Manchester United" son el
+# mismo club pero filas distintas. Agrupar por fuente evita sumar partidos de
+# dos universos de nombres en una misma tabla, que daria posiciones falsas.
+#
+# Es opcional para no romper una tabla silver vieja que no la tenga.
+_DIMENSIONES = ("fuente", "liga")
+
+
+def _dimensiones_presentes(df: pd.DataFrame) -> list[str]:
+    return [c for c in _DIMENSIONES if c in df.columns]
+
 
 def _stats_por_perspectiva(
     df: pd.DataFrame,
@@ -24,8 +38,9 @@ def _stats_por_perspectiva(
     Agrupa por `col_id` (id del equipo) —clave estable— y no por el nombre,
     que puede variar entre registros (ej. 'River' vs 'River Plate').
     """
+    claves = _dimensiones_presentes(df)
     return (
-        df.groupby(["liga", col_id])
+        df.groupby([*claves, col_id])
         .agg(
             PJ=(col_id,      "count"),
             GF=(col_gf,      "sum"),
@@ -33,7 +48,7 @@ def _stats_por_perspectiva(
             PG=("resultado", lambda x: (x == victoria).sum()),
             PE=("resultado", lambda x: (x == "Empate").sum()),
         )
-        .rename_axis(["liga", "id_equipo"])
+        .rename_axis([*claves, "id_equipo"])
     )
 
 
@@ -76,14 +91,15 @@ def calcular_tabla_posiciones(df_silver: pd.DataFrame) -> pd.DataFrame:
         df_silver, "id_equipo_visitante", "goles_visitante", "goles_local", "Visitante"
     )
 
-    stats = pd.concat([stats_local, stats_visitante]).groupby(["liga", "id_equipo"]).sum()
+    claves = _dimensiones_presentes(df_silver)
+    stats = pd.concat([stats_local, stats_visitante]).groupby([*claves, "id_equipo"]).sum()
     stats["PP"]  = stats["PJ"] - stats["PG"] - stats["PE"]
     stats["DG"]  = stats["GF"] - stats["GC"]
     stats["Pts"] = stats["PG"] * 3 + stats["PE"]
 
     tabla = (
         stats[["PJ", "PG", "PE", "PP", "GF", "GC", "DG", "Pts"]]
-        .sort_values(["liga", "Pts"], ascending=[True, False])
+        .sort_values([*claves, "Pts"], ascending=[*[True] * len(claves), False])
         .reset_index()
         .astype({
             "PJ": "int64", "PG": "int64", "PE": "int64", "PP": "int64",
@@ -95,5 +111,5 @@ def calcular_tabla_posiciones(df_silver: pd.DataFrame) -> pd.DataFrame:
     nombres = _mapa_id_a_nombre(df_silver)
     tabla = tabla.merge(nombres, on="id_equipo", how="left")
 
-    columnas = ["liga", "id_equipo", "equipo", "PJ", "PG", "PE", "PP", "GF", "GC", "DG", "Pts"]
+    columnas = [*claves, "id_equipo", "equipo", "PJ", "PG", "PE", "PP", "GF", "GC", "DG", "Pts"]
     return tabla[columnas]

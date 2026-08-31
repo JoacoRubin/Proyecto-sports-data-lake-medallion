@@ -83,3 +83,73 @@ def inicializar_tabla_partidos(ruta: str) -> None:
     )
     DeltaTable(ruta).alter.add_constraint({"ck_partidos_id_no_nulo": "id_evento IS NOT NULL"})
     logger.info("Tabla 'partidos' inicializada en '%s'.", ruta)
+
+
+# =============================================================================
+# Tabla bronze de la fuente football-data.co.uk.
+#
+# Tabla SEPARADA de la de TheSportsDB a propósito: bronze preserva cada fuente
+# con su fidelidad original. La unificación es trabajo de silver, que las lee
+# a las dos y las conforma a un único esquema.
+#
+# Comparte las 17 columnas canónicas de _SCHEMA_PARTIDOS y agrega las
+# estadísticas de partido y las cuotas, que TheSportsDB no publica.
+# =============================================================================
+
+_ESTADISTICAS_FOOTBALLDATA = [
+    pa.field("arbitro",                     pa.large_string()),
+    pa.field("goles_local_entretiempo",     pa.int64()),
+    pa.field("goles_visitante_entretiempo", pa.int64()),
+    pa.field("tiros_local",                 pa.int64()),
+    pa.field("tiros_visitante",             pa.int64()),
+    pa.field("tiros_arco_local",            pa.int64()),
+    pa.field("tiros_arco_visitante",        pa.int64()),
+    pa.field("faltas_local",                pa.int64()),
+    pa.field("faltas_visitante",            pa.int64()),
+    pa.field("corners_local",               pa.int64()),
+    pa.field("corners_visitante",           pa.int64()),
+    pa.field("amarillas_local",             pa.int64()),
+    pa.field("amarillas_visitante",         pa.int64()),
+    pa.field("rojas_local",                 pa.int64()),
+    pa.field("rojas_visitante",             pa.int64()),
+    pa.field("cuota_local",                 pa.float64()),
+    pa.field("cuota_empate",                pa.float64()),
+    pa.field("cuota_visitante",             pa.float64()),
+    # Cuotas del mercado (promedio de casas): habilitan el baseline adversario.
+    pa.field("cuota_over25",                pa.float64()),
+    pa.field("cuota_under25",               pa.float64()),
+    pa.field("cuota_local_mercado",         pa.float64()),
+    pa.field("cuota_empate_mercado",        pa.float64()),
+    pa.field("cuota_visitante_mercado",     pa.float64()),
+]
+
+_SCHEMA_PARTIDOS_FOOTBALLDATA = pa.schema(
+    list(_SCHEMA_PARTIDOS) + _ESTADISTICAS_FOOTBALLDATA
+)
+
+
+def inicializar_tabla_partidos_footballdata(ruta: str) -> None:
+    """Crea la tabla Delta de partidos de football-data.co.uk si no existe.
+
+    Particiona por (id_liga, temporada): es la unidad natural de carga —un CSV
+    por liga y temporada—, lo que permite re-ingerir una temporada puntual
+    sobreescribiendo solo su partición.
+    """
+    if tabla_delta_existe(ruta):
+        return
+    asegurar_directorio(ruta)
+    DeltaTable.create(
+        ruta,
+        schema=_SCHEMA_PARTIDOS_FOOTBALLDATA,
+        partition_by=["id_liga", "temporada"],
+        description=(
+            "Partidos historicos de football-data.co.uk. Incluye estadisticas "
+            "de partido y cuotas. Carga por liga-temporada (INSERT-OVERWRITE)."
+        ),
+    )
+    DeltaTable(ruta).alter.add_constraint({
+        "ck_fd_partidos_id_no_nulo":     "id_evento IS NOT NULL",
+        "ck_fd_partidos_equipos_no_nulos":
+            "equipo_local IS NOT NULL AND equipo_visitante IS NOT NULL",
+    })
+    logger.info("Tabla 'partidos_footballdata' inicializada en '%s'.", ruta)

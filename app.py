@@ -71,6 +71,15 @@ if gold.empty:
 
 # --- Filtro por liga -------------------------------------------------------
 ligas = sorted(gold["liga"].dropna().unique())
+# El data lake es multi-fuente y los nombres de equipo NO estan reconciliados
+# entre fuentes, asi que las posiciones se calculan por (fuente, liga) y aca se
+# elige cual mirar. Ver silver/transformations.py.
+if "fuente" in gold.columns and gold["fuente"].nunique() > 1:
+    fuentes = sorted(gold["fuente"].unique())
+    fuente_sel = st.sidebar.selectbox("Fuente de datos", fuentes)
+    gold = gold[gold["fuente"] == fuente_sel]
+    ligas = sorted(gold["liga"].dropna().unique())
+
 liga_sel = st.sidebar.selectbox("Liga", ligas)
 st.sidebar.caption(f"{len(ligas)} ligas en el data lake")
 
@@ -175,3 +184,142 @@ if not partidos.empty and "es_goleada" in partidos:
             hide_index=True,
             use_container_width=True,
         )
+
+# =============================================================================
+# --- Modelos (capa ML) ------------------------------------------------------
+#
+# ML es un CONSUMIDOR del data lake, igual que este dashboard: no es una capa
+# nueva del medallion. Muestra la ficha de cada modelo en produccion y el
+# historial de experimentos, que vive en tablas Delta de gold (no en MLflow).
+#
+# Los dos modelos comparten la maquinaria, asi que comparten esta vista: una
+# funcion parametrizada, no dos secciones copiadas.
+# =============================================================================
+st.divider()
+st.subheader("🤖 Modelos")
+
+from config import (
+    DIR_EXPERIMENTOS_GOLD,
+    DIR_MODELOS,
+    NOMBRE_MODELO_EXPULSIONES,
+    NOMBRE_MODELO_GOLES,
+)
+from ml.registry import cargar_modelo, leer_experimentos
+
+
+@st.cache_data(show_spinner=False)
+def cargar_experimentos() -> pd.DataFrame:
+    return leer_experimentos(DIR_EXPERIMENTOS_GOLD)
+
+
+@st.cache_data(show_spinner=False)
+def cargar_ficha(nombre: str) -> dict:
+    try:
+        _, metadata = cargar_modelo(nombre, DIR_MODELOS)
+        return metadata
+    except FileNotFoundError:
+        return {}
+
+
+def _seccion_modelo(nombre: str, descripcion: str, metrica_clave: str, vara: str) -> None:
+    """Ficha, métricas y experimentos de un modelo.
+
+    `metrica_clave` cambia entre modelos porque los targets son distintos: con
+    un 17% de expulsiones manda el PR-AUC (su baseline ES la prevalencia); con
+    un 53% de over 2.5 el ROC-AUC ya es legible.
+    """
+    ficha = cargar_ficha(nombre)
+    if not ficha:
+        st.info(
+            f"Todavía no hay modelo '{nombre}' entrenado. Ejecutá "
+            f"`python -m pipelines.ml_pipeline` (requiere la ingesta de "
+            f"football-data en bronze)."
+        )
+        return
+
+    st.caption(descripcion)
+
+    m = ficha["metricas"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(metrica_clave.upper(), f"{m[metrica_clave]:.4f}")
+    c2.metric("Tasa base", f"{ficha['tasa_base'] * 100:.1f}%")
+    c3.metric("Log-loss", f"{m['log_loss']:.4f}")
+    c4.metric("Partidos", f"{ficha['n_train']:,}")
+
+    experimentos = cargar_experimentos()
+    if experimentos.empty:
+        return
+
+    del_modelo = experimentos[experimentos["modelo"].str.startswith(f"{nombre}:")].copy()
+    if del_modelo.empty:
+        return
+
+    ultima = del_modelo[del_modelo["version"] == del_modelo["version"].max()].copy()
+    ultima["escalon"] = ultima["modelo"].str.split(":").str[-1]
+
+    st.markdown(f"**Los escalones** — la vara es *{vara}*.")
+    comparacion = (
+        ultima.groupby("escalon")
+        .agg(ROC_AUC=("roc_auc", "mean"), PR_AUC=("pr_auc", "mean"),
+             log_loss=("log_loss", "mean"), brier=("brier", "mean"),
+             folds=("fold", "count"))
+        .reset_index()
+        .sort_values("ROC_AUC", ascending=False)
+    )
+    st.dataframe(comparacion.round(4), hide_index=True, use_container_width=True)
+
+    fig_ml = px.bar(
+        ultima, x="temporada_test", y=metrica_clave, color="escalon", barmode="group",
+        labels={"temporada_test": "Temporada evaluada", metrica_clave: metrica_clave.upper()},
+    )
+    fig_ml.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(fig_ml, use_container_width=True)
+
+    with st.expander("Historial de experimentos (tabla Delta en gold)"):
+        st.caption(
+            "El tracking vive en el propio data lake — `data/gold/ml/experimentos` — "
+            "en vez de en MLflow: cero infraestructura extra y se consulta con el "
+            "mismo `leer_tabla_delta` que el resto del proyecto."
+        )
+        cols_hist = ["ejecutado_en", "version", "modelo", "temporada_test",
+                     "n_test", "n_positivos", "roc_auc", "pr_auc", "log_loss", "brier"]
+        st.dataframe(
+            del_modelo[[c for c in cols_hist if c in del_modelo.columns]]
+            .sort_values("ejecutado_en", ascending=False).round(4),
+            hide_index=True, use_container_width=True,
+        )
+
+
+tab_exp, tab_goles = st.tabs(["🟥 Expulsiones", "⚽ Over 2.5 goles"])
+
+with tab_exp:
+    _seccion_modelo(
+        NOMBRE_MODELO_EXPULSIONES,
+        "Probabilidad de que haya al menos una expulsión en el partido. "
+        "Target desbalanceado (17%), así que se mide con PR-AUC: su baseline "
+        "ES la prevalencia. **No se reporta accuracy**: predecir siempre «no» "
+        "acierta el 83% sin haber aprendido nada.",
+        metrica_clave="pr_auc",
+        vara="la tasa base (predecir la prevalencia)",
+    )
+
+with tab_goles:
+    _seccion_modelo(
+        NOMBRE_MODELO_GOLES,
+        "Probabilidad de que el partido termine con más de 2.5 goles. Target "
+        "balanceado (53%). Se mide contra una **vara adversaria**: la "
+        "probabilidad implícita del mercado de apuestas, que es el consenso de "
+        "gente que se juega plata.",
+        metrica_clave="roc_auc",
+        vara="el mercado de apuestas",
+    )
+    st.info(
+        "**El mercado gana, y era lo esperable.** ROC-AUC 0.6157 contra 0.6045 "
+        "de nuestro modelo. Pero fijate lo cerca que quedamos usando *solo* "
+        "estadísticas de partido, sin ninguna cuota de over/under: capturamos "
+        "~85% de la ventaja del mercado sobre la tasa base. Y agregarle "
+        "nuestras features al mercado no lo mejora — el modelo no contiene "
+        "información que el mercado no tenga ya. Eso es eficiencia de mercado, "
+        "medida.",
+        icon="📊",
+    )

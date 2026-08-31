@@ -135,4 +135,50 @@ def procesar_partidos(df_bronze: pd.DataFrame, df_equipos: pd.DataFrame) -> pd.D
         .pipe(agregar_columnas_derivadas)  # T4
         .pipe(renombrar_columnas)          # T5
     )
-    return enriquecer_con_equipos(df, df_equipos)  # T6
+    df = enriquecer_con_equipos(df, df_equipos)  # T6
+    df["fuente"] = FUENTE_THESPORTSDB
+    return df
+
+
+# =============================================================================
+# Multi-fuente: football-data.co.uk hacia silver.
+#
+# LA DECISION: NO SE HACE MATCHING DE NOMBRES ENTRE FUENTES
+#
+# TheSportsDB dice "Manchester United"; football-data dice "Man United". La
+# reaccion instintiva es escribir un matcher difuso. Es un pozo: ~160 equipos,
+# fusiones, ascensos y descensos, y cada falso positivo corrompe una tabla de
+# posiciones sin que nada lo avise.
+#
+# No hace falta resolverlo. `fuente` pasa a ser una dimension mas y las
+# posiciones se calculan por (fuente, liga). Cada tabla queda internamente
+# consistente y el lector elige cual mirar. Es mas honesto que un merge que
+# finge una union que nadie verifico.
+#
+# La otra diferencia: football-data no publica estadios ni ciudades, asi que
+# esta fuente no pasa por el JOIN de enriquecimiento (T6). Todo lo demas —
+# deduplicacion, nulos, tipos, columnas derivadas, renombrado — es identico.
+# =============================================================================
+
+FUENTE_THESPORTSDB  = "thesportsdb"
+FUENTE_FOOTBALLDATA = "footballdata"
+
+
+def procesar_partidos_footballdata(df_bronze: pd.DataFrame) -> pd.DataFrame:
+    """Aplica T1–T5 a los partidos de football-data.co.uk.
+
+    No aplica T6 (JOIN con equipos) porque esta fuente no trae metadatos de
+    estadio ni ciudad. Marcar `fuente` es lo que permite que gold no mezcle
+    equipos que no fueron reconciliados.
+    """
+    df = (
+        df_bronze
+        .pipe(deduplicar_partidos)         # T1
+        .pipe(manejar_nulos_partidos)      # T2
+        .pipe(convertir_tipos_y_fechas)    # T3
+        .pipe(agregar_columnas_derivadas)  # T4
+        .pipe(renombrar_columnas)          # T5
+    )
+    df = df.copy()
+    df["fuente"] = FUENTE_FOOTBALLDATA
+    return df

@@ -22,6 +22,13 @@ python-dotenv==1.2.2
 # Calidad de datos / contratos entre capas
 pandera==0.32.1
 
+# Machine Learning (modelo de expulsiones).
+# Va en el build del dashboard porque app.py carga el modelo entrenado.
+# scikit-learn tiene wheel cp314; se eligio sobre xgboost/lightgbm para no
+# sumar ~150MB de binario compilado a un build que ya esta ajustado.
+scikit-learn==1.9.0
+joblib==1.5.3
+
 # Dashboard / visualización
 streamlit==1.60.0
 plotly==6.9.0

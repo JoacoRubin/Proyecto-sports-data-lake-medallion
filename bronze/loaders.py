@@ -43,3 +43,26 @@ def guardar_partidos_bronze(df: pd.DataFrame, ruta: str) -> None:
         "[4/4] Partidos en '%s' | Particion: %s | %d registros | Estrategia: INCREMENTAL",
         ruta, fecha, len(df),
     )
+
+
+def guardar_partidos_footballdata_bronze(df: pd.DataFrame, ruta: str) -> None:
+    """Persiste partidos de football-data.co.uk — INSERT-OVERWRITE por liga-temporada.
+
+    Sobreescribe únicamente la partición (id_liga, temporada) que se está
+    cargando. Como los id_evento son deterministas, re-ingerir la misma
+    temporada es idempotente: reemplaza los mismos registros, no los duplica.
+    """
+    id_liga   = df["id_liga"].iloc[0]
+    temporada = df["temporada"].iloc[0]
+    predicado = f"id_liga = '{id_liga}' AND temporada = '{temporada}'"
+    guardar_en_delta(
+        df, ruta,
+        modo="overwrite",
+        columnas_particion=["id_liga", "temporada"],
+        predicado=predicado,
+        modo_esquema="merge",
+    )
+    logger.info(
+        "football-data en '%s' | Particion: %s / %s | %d registros",
+        ruta, id_liga, temporada, len(df),
+    )

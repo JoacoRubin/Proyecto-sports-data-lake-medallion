@@ -16,7 +16,10 @@
 
 from prefect import flow, task, get_run_logger
 
-from pipelines import bronze_pipeline, silver_pipeline, gold_pipeline
+from pipelines import (
+    bronze_pipeline, silver_pipeline, gold_pipeline,
+    footballdata_pipeline, ml_pipeline,
+)
 
 
 @task(name="bronze", retries=2, retry_delay_seconds=5)
@@ -47,6 +50,59 @@ def pipeline_medallion() -> None:
     tarea_silver()
     tarea_gold()
     logger.info("=== Pipeline medallion — completado ===")
+
+
+# =============================================================================
+# Rama de datos historicos + ML.
+#
+# Va en un flow aparte, no colgada del medallion, porque tiene otra CADENCIA:
+# el medallion se corre seguido (datos frescos de la API), mientras que la
+# carga historica de football-data son ~10 anios que casi no cambian.
+# Mezclarlas obligaria a bajar 50 CSVs en cada corrida sin necesidad.
+# =============================================================================
+
+@task(name="footballdata", retries=2, retry_delay_seconds=10)
+def tarea_footballdata() -> None:
+    """Ingesta historica de football-data.co.uk a bronze. Idempotente."""
+    footballdata_pipeline.ejecutar()
+
+
+@task(name="ml-expulsiones", retries=1, retry_delay_seconds=5)
+def tarea_ml_expulsiones() -> None:
+    """Entrena, evalua y registra el modelo de expulsiones."""
+    ml_pipeline.ejecutar()
+
+
+@task(name="ml-goles", retries=1, retry_delay_seconds=5)
+def tarea_ml_goles() -> None:
+    """Entrena el modelo de over 2.5 goles y lo compara contra el MERCADO.
+
+    Los dos modelos son tareas hermanas y no encadenadas: comparten la ingesta
+    pero ninguno depende del otro. Si el de expulsiones falla, este igual corre.
+    """
+    ml_pipeline.ejecutar_goles()
+
+
+@flow(name="ml-modelos", log_prints=True)
+def pipeline_ml() -> None:
+    """Ingesta historica -> los dos modelos.
+
+    La ingesta va primero porque ambos la necesitan; los modelos despues, uno
+    al lado del otro.
+    """
+    logger = get_run_logger()
+    logger.info("=== Pipeline ML - inicio ===")
+    tarea_footballdata()
+    tarea_ml_expulsiones()
+    tarea_ml_goles()
+    logger.info("=== Pipeline ML - completado ===")
+
+
+@flow(name="pipeline-completo", log_prints=True)
+def pipeline_completo() -> None:
+    """Corre todo: el medallion de TheSportsDB y la rama historica + ML."""
+    pipeline_medallion()
+    pipeline_ml()
 
 
 if __name__ == "__main__":

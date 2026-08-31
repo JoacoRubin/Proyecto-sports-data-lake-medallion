@@ -49,9 +49,55 @@ LIGAS = [
     {"nombre": "Portuguese Primeira Liga",      "id": "4344", "temporada": "2024-2025"},
 ]
 
+# -----------------------------------------------------------------------------
+# Fuente secundaria: football-data.co.uk (CSV historico, sin API key).
+#
+# La key publica de TheSportsDB devuelve 5 partidos por liga: alcanza para
+# demostrar el pipeline, no para entrenar un modelo. Esta fuente publica
+# temporadas COMPLETAS desde 1993 y ademas trae estadisticas de partido
+# (tiros, corners, tarjetas) y cuotas de apuestas.
+#
+# Codigos de division: E0=Premier, SP1=La Liga, I1=Serie A, D1=Bundesliga,
+# F1=Ligue 1. Ver bronze/mappers_footballdata.LIGAS_FOOTBALLDATA.
+#
+# Codigo de temporada = los dos anios en dos digitos: "2425" -> 2024-2025.
+# -----------------------------------------------------------------------------
+FOOTBALLDATA_DIVISIONES = os.getenv(
+    "FOOTBALLDATA_DIVISIONES", "E0,SP1,I1,D1,F1"
+).split(",")
+
+FOOTBALLDATA_TEMPORADAS = os.getenv(
+    "FOOTBALLDATA_TEMPORADAS",
+    "1516,1617,1718,1819,1920,2021,2122,2223,2324,2425",
+).split(",")
+
+DIR_PARTIDOS_FOOTBALLDATA_BRONZE = "data/bronze/footballdata/partidos"
+
+
 # Rutas bronze
 DIR_EQUIPOS_BRONZE  = "data/bronze/thesportsdb/equipos"
 DIR_PARTIDOS_BRONZE = "data/bronze/thesportsdb/partidos"
+
+# -----------------------------------------------------------------------------
+# Capa ML: modelo de expulsiones.
+#
+# El modelo de produccion es el LOGISTICO, no el gradient boosting. Medido
+# sobre 7 folds de origen movil, la logistica da PR-AUC 0.2134 contra 0.2042
+# del HistGradientBoosting, con intervalos solapados: son indistinguibles.
+# Cuando dos modelos empatan, gana el simple y explicable.
+#
+# Los experimentos se registran en una tabla Delta de gold en vez de en MLflow:
+# cero infraestructura nueva y se consultan como cualquier otra tabla del lake.
+# -----------------------------------------------------------------------------
+ML_MODELO_PRODUCCION = os.getenv("ML_MODELO_PRODUCCION", "logistico")
+ML_MIN_TEMPORADAS_TRAIN = int(os.getenv("ML_MIN_TEMPORADAS_TRAIN", "3"))
+
+DIR_MODELOS            = "data/models"
+DIR_EXPERIMENTOS_GOLD  = "data/gold/ml/experimentos"
+DIR_IMPORTANCIAS_GOLD  = "data/gold/ml/importancias"
+NOMBRE_MODELO_EXPULSIONES = "expulsiones"
+NOMBRE_MODELO_GOLES       = "goles"
+
 
 # Rutas silver
 DIR_PARTIDOS_SILVER = "data/silver/thesportsdb/partidos_procesados"
