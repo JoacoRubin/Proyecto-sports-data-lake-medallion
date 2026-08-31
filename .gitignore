@@ -7,8 +7,15 @@ service.key
 # Secrets de Streamlit (nunca subir a git)
 .streamlit/secrets.toml
 
-# Data Lake generado (bronze, silver, gold)
-data/
+# Data Lake generado (bronze, silver, gold, models) — SE TRACKEA.
+#
+# Se commitea a proposito: Streamlit Community Cloud clona el repo y no
+# persiste nada entre reinicios del contenedor. Si data/ estuviera ignorado,
+# cada cold start (o cada redeploy) forzaria a `asegurar_datos_generados()` en
+# app.py a rehacer bronze->silver->gold pegandole en vivo a la API antes de
+# poder mostrar un solo pixel — y a la capa ML directamente no la regenera
+# nadie, se queda huerfana. Ver .github/workflows/refresh-*.yml: son los que
+# mantienen esto actualizado, el dashboard nunca deberia generarlo el solo.
 
 # Python
 __pycache__/
