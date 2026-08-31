@@ -1,0 +1,59 @@
+# =============================================================================
+# refresh-thesportsdb.yml — Mantiene fresco el medallion de TheSportsDB.
+#
+# POR QUE EXISTE
+# ---------------
+# app.py corre en Streamlit Community Cloud, que NO persiste el filesystem
+# entre reinicios del contenedor. Sin este workflow, cada cold start dispara
+# `asegurar_datos_generados()` (app.py) y el USUARIO que entra a esa hora paga
+# el costo de correr bronze -> silver -> gold en vivo contra la API.
+#
+# Este job corre aparte, con cadencia frecuente (datos de la API cambian
+# seguido), y commitea data/bronze/thesportsdb, data/silver y data/gold al
+# repo. Streamlit Cloud redeploya con el commit y sirve datos ya generados:
+# el cold start deja de pagar el precio del pipeline.
+#
+# No toca football-data ni ML — esa es otra cadencia, ver refresh-ml.yml.
+# =============================================================================
+name: Refresh TheSportsDB data lake
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # todos los dias 07:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-thesportsdb
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Instalar dependencias (dashboard + orquestacion)
+        run: python -m pip install -r requirements-orchestration.txt
+
+      - name: Correr el pipeline medallion (bronze -> silver -> gold)
+        run: python -m pipelines.flow
+
+      - name: Commitear el data lake si cambio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/bronze/thesportsdb data/silver data/gold/thesportsdb
+          if git diff --cached --quiet; then
+            echo "Sin cambios en el data lake, no hay nada que commitear."
+            exit 0
+          fi
+          git commit -m "chore(data): refresh thesportsdb medallion"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push

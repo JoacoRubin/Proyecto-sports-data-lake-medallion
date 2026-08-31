@@ -1,0 +1,59 @@
+# =============================================================================
+# refresh-ml.yml — Ingesta historica de football-data + reentrenamiento ML.
+#
+# POR QUE EXISTE
+# ---------------
+# A diferencia del medallion de TheSportsDB, app.py NUNCA regenera esto solo:
+# la seccion "Modelos" del dashboard (app.py) solo LEE data/models y
+# data/gold/ml/*, y si no encuentra nada muestra "todavia no hay modelo
+# entrenado" — nadie dispara el entrenamiento en produccion. Sin este workflow
+# el tab de ML queda huerfano para siempre en Streamlit Cloud.
+#
+# Cadencia semanal (no diaria) a proposito: football-data.co.uk son ~10 anios
+# de historico que casi no cambian, y reentrenar no necesita mas frecuencia
+# que esa. Mezclarlo con el refresh diario de refresh-thesportsdb.yml
+# obligaria a bajar los CSVs historicos sin necesidad (ver el comentario de
+# pipelines/flow.py, que ya documentaba esta razon antes de este workflow).
+# =============================================================================
+name: Refresh football-data + ML models
+
+on:
+  schedule:
+    - cron: "0 6 * * 0"   # domingos 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-ml
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Instalar dependencias (dashboard + orquestacion)
+        run: python -m pip install -r requirements-orchestration.txt
+
+      - name: Ingerir football-data y reentrenar los dos modelos
+        run: python -c "from pipelines.flow import pipeline_ml; pipeline_ml()"
+
+      - name: Commitear bronze/footballdata, modelos y experimentos si cambio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/bronze/footballdata data/models data/gold/ml
+          if git diff --cached --quiet; then
+            echo "Sin cambios en football-data/ML, no hay nada que commitear."
+            exit 0
+          fi
+          git commit -m "chore(data): refresh football-data ingest + retrain ml models"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push

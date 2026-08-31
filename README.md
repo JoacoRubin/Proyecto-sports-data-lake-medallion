@@ -246,3 +246,27 @@ el resto de las ligas viene vacío. No es una feature utilizable cross-liga.
 
 ---
 
+## Datos en producción — por qué `data/` está commiteado
+
+El dashboard corre en Streamlit Community Cloud, que clona el repo y **no
+persiste el filesystem** entre reinicios del contenedor (se duerme tras
+inactividad y arranca de cero). Si `data/` estuviera en `.gitignore`, cada
+cold start dejaría al primer usuario que entra pagando el costo de rehacer
+bronze → silver → gold en vivo contra la API — y a la capa ML directamente no
+la regeneraría nadie, porque `app.py` solo la LEE, nunca la entrena.
+
+Por eso `data/` se trackea, y dos GitHub Actions la mantienen fresca con la
+cadencia que ya tenía sentido en `pipelines/flow.py` (datos de API seguido,
+histórico de football-data casi nunca):
+
+| Workflow | Cadencia | Corre |
+|---|---|---|
+| `.github/workflows/refresh-thesportsdb.yml` | diaria | `pipeline_medallion` (bronze → silver → gold de TheSportsDB) |
+| `.github/workflows/refresh-ml.yml` | semanal | `pipeline_ml` (ingesta football-data + reentrena los dos modelos) |
+
+Cada uno commitea solo lo que le corresponde y pushea a `main` — Streamlit
+Cloud redeploya con el commit y sirve datos ya generados. El pipeline dejó de
+correr en el request del usuario.
+
+---
+
