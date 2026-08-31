@@ -98,7 +98,10 @@ def _baseline_mercado(matriz: pd.DataFrame, min_temporadas: int) -> dict | None:
         ys.append(y.iloc[idx_test][con_cuota.values].values)
 
     Y, P = np.concatenate(ys), np.concatenate(ps)
-    resultado = {"modelo": "mercado", "folds": len(ys)}
+    resultado = {
+        "modelo": "mercado", "folds": len(ys),
+        "n_test": len(Y), "n_positivos": int(Y.sum()),
+    }
     resultado.update({k: v for k, v in metricas(Y, P).items()})
     return resultado
 
@@ -130,6 +133,7 @@ def ejecutar_modelo(
 
     logger.info("[3/6] Evaluando con validacion de origen movil...")
     resumen, resultados_por_modelo = [], {}
+    vara = None
 
     # El baseline adversario va PRIMERO: es la vara contra la que se lee todo.
     if cfg.baseline_extra:
@@ -204,6 +208,31 @@ def ejecutar_modelo(
             folds, {**metadata, "modelo": f"{cfg.nombre}:{nombre}"},
             DIR_EXPERIMENTOS_GOLD, version,
         )
+
+    # El baseline se registra aca (no donde se calculo, en el paso 3) porque
+    # recien aca existe `version` — es lo que permite comparar "mercado" contra
+    # "logistico"/"hgb" DE LA MISMA CORRIDA en la tabla de experimentos, en vez
+    # de perderse en el log de una corrida de CI que en algun momento se purga.
+    # Fila unica (no una por fold): el calculo de _baseline_mercado pooló todos
+    # los folds en un solo Y/P antes de medir, asi que "fold" no aplica.
+    if vara:
+        registrar_experimento(
+            pd.DataFrame([{
+                "fold":           0,
+                "temporada_test": "pooled",
+                "n_test":         vara["n_test"],
+                "n_positivos":    vara["n_positivos"],
+                "tasa_base":      vara["tasa_base"],
+                "pr_auc":         vara["pr_auc"],
+                "lift_pr_auc":    vara["lift_pr_auc"],
+                "roc_auc":        vara["roc_auc"],
+                "log_loss":       vara["log_loss"],
+                "brier":          vara["brier"],
+            }]),
+            {"modelo": f"{cfg.nombre}:mercado", "features": ["prob_mercado_over25"], "prior": None},
+            DIR_EXPERIMENTOS_GOLD, version,
+        )
+        logger.info("      Baseline 'mercado' registrado junto a los modelos de esta corrida.")
 
     df_resumen = pd.DataFrame(resumen)
     logger.info("Modelo '%s' guardado | version %s", cfg.nombre, version)
