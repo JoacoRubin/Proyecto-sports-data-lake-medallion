@@ -1,0 +1,42 @@
+{
+  "modelo": "logistico",
+  "target": "hubo_expulsion",
+  "features": [
+    "liga",
+    "equipo_tasa_exp_local",
+    "equipo_tasa_exp_visitante",
+    "faltas_prom5_local",
+    "faltas_prom10_local",
+    "amarillas_prom5_local",
+    "amarillas_prom10_local",
+    "rojas_prom5_local",
+    "rojas_prom10_local",
+    "faltas_prom5_visitante",
+    "faltas_prom10_visitante",
+    "amarillas_prom5_visitante",
+    "amarillas_prom10_visitante",
+    "rojas_prom5_visitante",
+    "rojas_prom10_visitante",
+    "prob_local",
+    "prob_empate",
+    "prob_visitante",
+    "paridad",
+    "h2h_tasa_exp",
+    "mes",
+    "fecha_num"
+  ],
+  "prior": 0.18528660094925156,
+  "n_train": 18011,
+  "n_positivos": 3122,
+  "tasa_base": 0.1733385153517295,
+  "min_temporadas_train": 3,
+  "metricas": {
+    "pr_auc": 0.21713730673607706,
+    "lift_pr_auc": 1.2910095651720872,
+    "roc_auc": 0.5908537560860027,
+    "log_loss": 0.4463093742930257,
+    "brier": 0.13813073078506252
+  },
+  "version": "20260913T062916097766",
+  "guardado_en": "2026-09-13T06:29:16.100056+00:00"
+}
