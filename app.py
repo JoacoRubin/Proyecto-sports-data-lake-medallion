@@ -10,9 +10,15 @@
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 
-from config import DIR_ESTADISTICAS_GOLD, DIR_PARTIDOS_SILVER
+from config import (
+    DIR_ESTADISTICAS_GOLD,
+    DIR_PARTIDOS_FOOTBALLDATA_BRONZE,
+    DIR_PARTIDOS_SILVER,
+    INFERENCE_API_URL,
+)
 from utils.delta import leer_tabla_delta, tabla_delta_existe
 
 st.set_page_config(page_title="TheSportsDB — Data Lake", page_icon="⚽", layout="wide")
@@ -32,6 +38,17 @@ def cargar_silver() -> pd.DataFrame:
     if not tabla_delta_existe(DIR_PARTIDOS_SILVER):
         return pd.DataFrame()
     return leer_tabla_delta(DIR_PARTIDOS_SILVER)
+
+
+@st.cache_data(show_spinner=False)
+def cargar_partidos_footballdata() -> pd.DataFrame:
+    """Historico de football-data (bronze): de aca salen liga/equipos/temporada
+    para armar el formulario de prediccion -- es la misma fuente con la que
+    entrena `pipelines.ml_pipeline`, asi que los nombres de equipo calzan con
+    lo que el modelo ya conoce."""
+    if not tabla_delta_existe(DIR_PARTIDOS_FOOTBALLDATA_BRONZE):
+        return pd.DataFrame()
+    return leer_tabla_delta(DIR_PARTIDOS_FOOTBALLDATA_BRONZE)
 
 
 def _medalla(pos: int) -> str:
@@ -323,3 +340,80 @@ with tab_goles:
         "medida.",
         icon="📊",
     )
+
+# =============================================================================
+# --- Predecir un partido nuevo (via la inference API) -----------------------
+#
+# La UNICA seccion de app.py que llama a un servicio HTTP en vez de leer Delta
+# directamente. Es deliberado: separa el dashboard (lee datos ya procesados)
+# de la inferencia en vivo (llama al modelo aprobado a traves de
+# services/inference_api, que a su vez reusa ml/inference.py). Streamlit
+# jamas carga un .joblib aca -- solo arma un POST y muestra la respuesta.
+#
+# LIMITACION CONOCIDA: en Streamlit Community Cloud (donde corre hoy este
+# dashboard, ver README) no hay un segundo proceso sirviendo la API, asi que
+# esta seccion va a mostrar un error de conexion en produccion hasta que el
+# servicio tenga su propio deploy. Localmente, con
+# `uvicorn services.inference_api.main:app --reload` corriendo, funciona.
+# =============================================================================
+st.divider()
+st.subheader("🔮 Predecir un partido nuevo")
+st.caption(
+    f"Le pega por HTTP a la inference API en `{INFERENCE_API_URL}`, que carga "
+    "el modelo aprobado y corre el mismo feature engineering del "
+    "entrenamiento. Streamlit no carga ningún modelo directamente."
+)
+
+partidos_fd = cargar_partidos_footballdata()
+if partidos_fd.empty:
+    st.info(
+        "No hay histórico de football-data en bronze todavía. Corré "
+        "`python -m pipelines.footballdata_pipeline` para poder predecir."
+    )
+else:
+    ligas_fd = sorted(partidos_fd["liga"].dropna().unique())
+    with st.form("form_prediccion"):
+        c1, c2, c3 = st.columns(3)
+        liga_pred = c1.selectbox("Liga", ligas_fd)
+        equipos_liga = sorted(pd.concat([
+            partidos_fd.loc[partidos_fd["liga"] == liga_pred, "equipo_local"],
+            partidos_fd.loc[partidos_fd["liga"] == liga_pred, "equipo_visitante"],
+        ]).dropna().unique())
+        local = c2.selectbox("Equipo local", equipos_liga)
+        visitante = c3.selectbox(
+            "Equipo visitante",
+            [e for e in equipos_liga if e != local] or equipos_liga,
+        )
+        fecha = st.date_input("Fecha del partido")
+        enviado = st.form_submit_button("Predecir")
+
+    if enviado:
+        temporada_pred = partidos_fd.loc[partidos_fd["liga"] == liga_pred, "temporada"].max()
+        payload = {
+            "liga": liga_pred,
+            "temporada": temporada_pred,
+            "equipo_local": local,
+            "equipo_visitante": visitante,
+            "fecha_partido": fecha.isoformat(),
+        }
+        try:
+            r_exp = requests.post(f"{INFERENCE_API_URL}/predictions/expulsiones", json=payload, timeout=10)
+            r_gol = requests.post(f"{INFERENCE_API_URL}/predictions/goles", json=payload, timeout=10)
+        except requests.exceptions.RequestException as exc:
+            st.error(
+                f"No se pudo conectar con la inference API en `{INFERENCE_API_URL}`. "
+                f"¿Está corriendo `uvicorn services.inference_api.main:app`? ({exc})"
+            )
+        else:
+            if r_exp.status_code != 200 or r_gol.status_code != 200:
+                fallida = r_exp if r_exp.status_code != 200 else r_gol
+                st.error(f"La API respondió con un error: {fallida.json().get('detail', fallida.text)}")
+            else:
+                exp, gol = r_exp.json(), r_gol.json()
+                p1, p2 = st.columns(2)
+                p1.metric("🟥 Prob. expulsión", f"{exp['probabilidad'] * 100:.1f} %")
+                p2.metric("⚽ Prob. over 2.5 goles", f"{gol['probabilidad'] * 100:.1f} %")
+                st.caption(
+                    f"Modelo expulsiones {exp['version_modelo']} ({exp['tiempo_ms']:.0f} ms) · "
+                    f"Modelo goles {gol['version_modelo']} ({gol['tiempo_ms']:.0f} ms)"
+                )

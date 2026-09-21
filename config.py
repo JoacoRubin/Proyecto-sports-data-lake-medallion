@@ -104,3 +104,11 @@ DIR_PARTIDOS_SILVER = "data/silver/thesportsdb/partidos_procesados"
 
 # Rutas gold
 DIR_ESTADISTICAS_GOLD = "data/gold/thesportsdb/estadisticas_equipos"
+
+# -----------------------------------------------------------------------------
+# Inference API (services/inference_api). El dashboard le pega por HTTP en vez
+# de cargar el modelo directamente -- ver README, seccion "Servir los
+# modelos". Por defecto apunta a un uvicorn local; en un deploy real se
+# sobreescribe con la URL del servicio.
+# -----------------------------------------------------------------------------
+INFERENCE_API_URL = os.getenv("INFERENCE_API_URL", "http://localhost:8000")
