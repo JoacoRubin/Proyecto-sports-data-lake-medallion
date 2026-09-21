@@ -370,6 +370,35 @@ el resto de las ligas viene vacío. No es una feature utilizable cross-liga.
 
 ---
 
+## CI — la suite corre sola en cada push
+
+`refresh-ml.yml` y `refresh-thesportsdb.yml` corren con cron y commitean
+datos: no son CI, no corren en push/PR, no bloquean nada. Antes de
+`.github/workflows/ci.yml`, los 256 tests de `tests/` solo corrían si alguien
+se acordaba de correrlos a mano.
+
+```
+push / PR
+   ↓
+pytest (256 tests: contratos Pandera, leakage, quality gate, contrato HTTP)
+   ↓
+docker build (Dockerfile.api + Dockerfile.dashboard)
+```
+
+El job de Docker no es cosmético: la primera vez que se armaron
+`Dockerfile.api`/`Dockerfile.dashboard`, un mismatch de versión de Python
+(3.11 en vez de la 3.14 que pide `requirements.txt`) rompió el build en el
+momento de correrlo a mano. Este job es lo que hubiera atajado eso en el
+commit, no en el próximo deploy.
+
+**Qué no cubre, a propósito**: no reentrena los modelos contra el dataset
+real — eso ya lo hace `refresh-ml.yml` semanalmente, y duplicarlo en cada
+push sería caro y redundante. `tests/test_ml_promotion.py` ya prueba el
+quality gate con métricas sintéticas, sin necesitar Delta ni los 18k
+partidos reales.
+
+---
+
 ## Datos en producción — por qué `data/` está commiteado
 
 El dashboard corre en Streamlit Community Cloud, que clona el repo y **no
