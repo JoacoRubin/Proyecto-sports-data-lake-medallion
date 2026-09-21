@@ -1,0 +1,32 @@
+# =============================================================================
+# Dockerfile.api — services/inference_api como servicio independiente.
+#
+# Imagen separada del dashboard: este proceso no necesita streamlit/plotly, y
+# el runtime del dashboard no necesita un servidor ASGI. Cada uno con su
+# propio ciclo de build y de escalado.
+#
+# Build:  docker build -f Dockerfile.api -t inference-api .
+# Correr: docker run -p 8000:8000 inference-api
+# (o, mas simple, docker compose up — ver docker-compose.yml)
+# =============================================================================
+
+# 3.14, no 3.11: requirements.txt fija numpy==2.5.1 y otras versiones que
+# solo tienen wheels para cp314 (ver el comentario de ese archivo).
+FROM python:3.14-slim
+
+WORKDIR /app
+
+# Capa de dependencias separada del codigo: cachea entre builds mientras los
+# requirements no cambien, aunque el codigo si. requirements-api.txt hace
+# `-r requirements.txt`, asi que los dos tienen que estar antes del pip install.
+COPY requirements.txt requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# El servicio necesita config.py, ml/, utils/, services/ y los modelos ya
+# entrenados en data/models/ + el historico en data/bronze/footballdata/ --
+# todo vive en el repo (ver .gitignore: data/ se trackea a proposito).
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "services.inference_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

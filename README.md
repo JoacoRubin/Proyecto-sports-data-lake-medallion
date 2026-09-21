@@ -173,6 +173,46 @@ justifica con evidencia (tracking en Delta, cero infraestructura nueva). Este
 servicio consume esa misma capa de registro tal cual está — no había ninguna
 razón nueva para revisarla.
 
+### Dashboard + API juntos, con Docker
+
+`app.py` tiene una sección "Predecir un partido nuevo" que le pega a esta API
+por HTTP. Localmente, sin nada más corriendo, esa sección no tiene a quién
+llamar. `docker-compose.yml` levanta los dos servicios en la misma red para
+que se encuentren:
+
+```bash
+docker compose up --build
+```
+
+| Servicio | Puerto en el host | Cómo lo encuentra el otro |
+|---|---|---|
+| `api` (inference API) | `localhost:8010` | — |
+| `dashboard` (Streamlit) | `localhost:8501` | `INFERENCE_API_URL=http://api:8000` (nombre del servicio de compose, no `localhost`) |
+
+El `8010` en vez de `8000` es simplemente para no pisar otro proceso que ya
+podés tener escuchando en ese puerto en tu máquina; puertos del host, no del
+contenedor — adentro de la red de compose los dos servicios se siguen
+hablando por el `8000` interno.
+
+**Por qué la imagen base es `python:3.14-slim`, no `3.11`**: `requirements.txt`
+fija `numpy==2.5.1` y otras versiones que solo tienen wheels para cp314 (ver
+el comentario de ese archivo — es la misma versión que corre en Streamlit
+Community Cloud). Usar `3.11-slim` ahí rompe el build; lo dice el propio pip
+cuando no encuentra la versión.
+
+`Dockerfile.api` y `Dockerfile.dashboard` son imágenes separadas a propósito
+(mismo criterio que separar `requirements-api.txt` de `requirements.txt`):
+cada servicio instala solo lo que necesita, y uno puede reconstruirse sin
+invalidar la cache del otro.
+
+**Limitación conocida**: esto resuelve "correr los dos servicios juntos
+localmente". Streamlit Community Cloud (donde el dashboard está deployado
+hoy) sigue sirviendo un solo proceso — la inference API todavía no tiene
+deploy propio, así que en producción esa sección del dashboard muestra el
+error de conexión hasta que eso pase (el siguiente paso natural del roadmap:
+un host para la API, y recién ahí `INFERENCE_API_URL` en el deploy real de
+Streamlit Cloud apunta a esa URL en vez de a un contenedor local).
+
 ---
 
 ## Modelo de goles (over 2.5) — contra el mercado

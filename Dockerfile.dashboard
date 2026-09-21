@@ -1,0 +1,26 @@
+# =============================================================================
+# Dockerfile.dashboard — app.py (Streamlit) como servicio independiente.
+#
+# Se conecta a la inference API por HTTP (INFERENCE_API_URL) en vez de cargar
+# los modelos directamente. Ver services/inference_api/ y la seccion
+# "Predecir un partido nuevo" de app.py.
+#
+# Build:  docker build -f Dockerfile.dashboard -t dashboard .
+# Correr: docker run -p 8501:8501 -e INFERENCE_API_URL=http://api:8000 dashboard
+# (o, mas simple, docker compose up — ver docker-compose.yml)
+# =============================================================================
+
+# 3.14, no 3.11: requirements.txt fija numpy==2.5.1 y otras versiones que
+# solo tienen wheels para cp314 (ver el comentario de ese archivo).
+FROM python:3.14-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]

@@ -1,0 +1,44 @@
+# =============================================================================
+# docker-compose.yml — inference API + dashboard corriendo juntos, local.
+#
+# Resuelve la limitacion que quedo documentada en README.md y app.py: en
+# Streamlit Community Cloud no hay un segundo proceso para la API, asi que la
+# seccion "Predecir un partido nuevo" fallaba en produccion. Aca los dos
+# servicios comparten una red de compose y el dashboard encuentra a la API
+# por su nombre de servicio ("api"), no por localhost.
+#
+# Correr:  docker compose up --build
+# API:      http://localhost:8000
+# Dashboard: http://localhost:8501
+# =============================================================================
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      # 8010 en el host: el 8000 ya lo usa otro proyecto en esta maquina. El
+      # puerto interno sigue siendo 8000 -- INFERENCE_API_URL de abajo le
+      # habla al contenedor por la red de compose, no por el puerto del host.
+      - "8010:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      # Nombre del servicio de compose, no localhost: la red interna de
+      # compose resuelve "api" al contenedor de arriba.
+      INFERENCE_API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy

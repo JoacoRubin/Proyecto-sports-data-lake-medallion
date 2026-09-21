@@ -1,0 +1,29 @@
+# =============================================================================
+# .dockerignore — lo que NO va al contexto de build.
+#
+# `data/` NO esta acá a proposito: los dos servicios necesitan los modelos
+# entrenados y las tablas Delta dentro de la imagen para poder servir algo.
+# Es la misma razon por la que `data/` esta commiteado en git (ver .gitignore).
+# =============================================================================
+
+.git/
+.github/
+.devcontainer/
+.streamlit/secrets.toml
+
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+tests/
+
+.vscode/
+.idea/
+*.iml
+
+.env
+ca.pem
+service.cert
+service.key
+
+README.md
