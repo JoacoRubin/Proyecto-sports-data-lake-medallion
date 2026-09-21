@@ -218,15 +218,21 @@ st.subheader("🤖 Modelos")
 from config import (
     DIR_EXPERIMENTOS_GOLD,
     DIR_MODELOS,
+    DIR_PROMOCIONES_GOLD,
     NOMBRE_MODELO_EXPULSIONES,
     NOMBRE_MODELO_GOLES,
 )
-from ml.registry import cargar_modelo, leer_experimentos
+from ml.registry import cargar_modelo, leer_experimentos, leer_promociones
 
 
 @st.cache_data(show_spinner=False)
 def cargar_experimentos() -> pd.DataFrame:
     return leer_experimentos(DIR_EXPERIMENTOS_GOLD)
+
+
+@st.cache_data(show_spinner=False)
+def cargar_promociones() -> pd.DataFrame:
+    return leer_promociones(DIR_PROMOCIONES_GOLD)
 
 
 @st.cache_data(show_spinner=False)
@@ -305,6 +311,26 @@ def _seccion_modelo(nombre: str, descripcion: str, metrica_clave: str, vara: str
             .sort_values("ejecutado_en", ascending=False).round(4),
             hide_index=True, use_container_width=True,
         )
+
+    promociones = cargar_promociones()
+    del_modelo_promo = (
+        promociones[promociones["modelo"] == nombre] if not promociones.empty else promociones
+    )
+    if not del_modelo_promo.empty:
+        with st.expander("Historial de promociones (quality gate)"):
+            st.caption(
+                "Cada reentrenamiento pasa por un gate antes de reemplazar el modelo "
+                "en producción: promueve solo si mejora la métrica principal *y* el "
+                "Brier no empeora más de la tolerancia (`ml/promotion.py`). Un "
+                "rechazo no borra nada — el modelo anterior sigue sirviendo."
+            )
+            cols_promo = ["ejecutado_en", "promovido", "metrica_principal",
+                          "valor_candidato", "valor_actual", "razon"]
+            st.dataframe(
+                del_modelo_promo[[c for c in cols_promo if c in del_modelo_promo.columns]]
+                .sort_values("ejecutado_en", ascending=False).round(4),
+                hide_index=True, use_container_width=True,
+            )
 
 
 tab_exp, tab_goles = st.tabs(["🟥 Expulsiones", "⚽ Over 2.5 goles"])

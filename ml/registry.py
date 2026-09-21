@@ -25,12 +25,15 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import joblib
 import pandas as pd
 
 from utils.delta import asegurar_directorio, guardar_en_delta, leer_tabla_delta, tabla_delta_existe
+
+if TYPE_CHECKING:
+    from ml.promotion import DecisionPromocion
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +162,39 @@ def registrar_importancias(
 
 def leer_importancias(ruta_tabla: str) -> pd.DataFrame:
     """Importancias historicas. Vacio si todavia no se entreno nada."""
+    if not tabla_delta_existe(ruta_tabla):
+        return pd.DataFrame()
+    return leer_tabla_delta(ruta_tabla)
+
+
+def registrar_promocion(decision: "DecisionPromocion", modelo: str, ruta_tabla: str) -> None:
+    """Deja el veredicto del quality gate en Delta (ver ml/promotion.py).
+
+    Se registra tanto si se acepta como si se rechaza. El rechazo es lo que
+    mas importa poder auditar despues: por que un candidato NO reemplazo al
+    modelo en produccion, aunque nunca haya llegado a guardarse un .joblib.
+    """
+    fila = pd.DataFrame([{
+        "modelo":                        modelo,
+        "promovido":                     decision.promovido,
+        "razon":                         decision.razon,
+        "metrica_principal":             decision.metrica_principal,
+        "valor_candidato":               decision.valor_candidato,
+        "valor_actual":                  decision.valor_actual,
+        "metrica_calibracion":           decision.metrica_calibracion,
+        "valor_calibracion_candidato":   decision.valor_calibracion_candidato,
+        "valor_calibracion_actual":      decision.valor_calibracion_actual,
+        "ejecutado_en":                  datetime.now(timezone.utc).isoformat(),
+    }])
+    guardar_en_delta(fila, ruta_tabla, modo="append", modo_esquema="merge")
+    logger.info(
+        "Promocion registrada | modelo %s | promovido=%s | %s",
+        modelo, decision.promovido, decision.razon,
+    )
+
+
+def leer_promociones(ruta_tabla: str) -> pd.DataFrame:
+    """Historial de decisiones del quality gate. Vacio si nunca corrio."""
     if not tabla_delta_existe(ruta_tabla):
         return pd.DataFrame()
     return leer_tabla_delta(ruta_tabla)

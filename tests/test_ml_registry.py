@@ -15,12 +15,15 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyClassifier
 
+from ml.promotion import evaluar_promocion
 from ml.registry import (
     cargar_modelo,
     guardar_modelo,
     leer_experimentos,
+    leer_promociones,
     listar_versiones,
     registrar_experimento,
+    registrar_promocion,
 )
 
 
@@ -151,3 +154,54 @@ def test_los_experimentos_se_acumulan_no_se_pisan(tmp_path):
 def test_leer_experimentos_inexistentes_devuelve_vacio(tmp_path):
     """El dashboard no debe romperse si todavía no se entrenó nada."""
     assert leer_experimentos(str(tmp_path / "no_existe")).empty
+
+
+# --- Tabla de promociones (quality gate) ------------------------------------
+def test_una_promocion_aceptada_queda_registrada(tmp_path):
+    ruta = str(tmp_path / "promociones")
+    decision = evaluar_promocion({"pr_auc": 0.22, "brier": 0.13}, {"pr_auc": 0.21, "brier": 0.14}, "pr_auc")
+    registrar_promocion(decision, "expulsiones", ruta)
+
+    g = leer_promociones(ruta)
+    assert len(g) == 1
+    assert bool(g["promovido"].iloc[0]) is True
+    assert g["modelo"].iloc[0] == "expulsiones"
+
+
+def test_una_promocion_rechazada_tambien_queda_registrada(tmp_path):
+    """El rechazo es justo lo que hay que poder auditar: por que un
+    candidato NO reemplazo al modelo en produccion."""
+    ruta = str(tmp_path / "promociones")
+    decision = evaluar_promocion({"pr_auc": 0.20, "brier": 0.13}, {"pr_auc": 0.21, "brier": 0.14}, "pr_auc")
+    registrar_promocion(decision, "expulsiones", ruta)
+
+    g = leer_promociones(ruta)
+    assert bool(g["promovido"].iloc[0]) is False
+    assert g["razon"].iloc[0]
+
+
+def test_las_promociones_se_acumulan_no_se_pisan(tmp_path):
+    ruta = str(tmp_path / "promociones")
+    aceptada = evaluar_promocion({"pr_auc": 0.22, "brier": 0.13}, {"pr_auc": 0.21, "brier": 0.14}, "pr_auc")
+    rechazada = evaluar_promocion({"pr_auc": 0.20, "brier": 0.13}, {"pr_auc": 0.21, "brier": 0.14}, "pr_auc")
+    registrar_promocion(aceptada, "expulsiones", ruta)
+    registrar_promocion(rechazada, "goles", ruta)
+
+    g = leer_promociones(ruta)
+    assert len(g) == 2
+    assert set(g["modelo"]) == {"expulsiones", "goles"}
+
+
+def test_primer_entrenamiento_sin_modelo_actual_tambien_se_registra(tmp_path):
+    """valor_actual es None: tiene que poder guardarse en Delta igual."""
+    ruta = str(tmp_path / "promociones")
+    decision = evaluar_promocion({"pr_auc": 0.22, "brier": 0.13}, None, "pr_auc")
+    registrar_promocion(decision, "expulsiones", ruta)
+
+    g = leer_promociones(ruta)
+    assert bool(g["promovido"].iloc[0]) is True
+    assert g["valor_actual"].iloc[0] is None or pd.isna(g["valor_actual"].iloc[0])
+
+
+def test_leer_promociones_inexistentes_devuelve_vacio(tmp_path):
+    assert leer_promociones(str(tmp_path / "no_existe")).empty

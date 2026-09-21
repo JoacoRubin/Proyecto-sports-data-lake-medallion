@@ -34,8 +34,10 @@ from config import (
     DIR_IMPORTANCIAS_GOLD,
     DIR_MODELOS,
     DIR_PARTIDOS_FOOTBALLDATA_BRONZE,
+    DIR_PROMOCIONES_GOLD,
     ML_MIN_TEMPORADAS_TRAIN,
     ML_MODELO_PRODUCCION,
+    ML_TOLERANCIA_CALIBRACION,
     NOMBRE_MODELO_EXPULSIONES,
     NOMBRE_MODELO_GOLES,
 )
@@ -48,7 +50,14 @@ from ml.features_goles import (
     construir_features_goles,
 )
 from ml.inspection import importancia_por_permutacion
-from ml.registry import guardar_modelo, registrar_experimento, registrar_importancias
+from ml.promotion import evaluar_promocion
+from ml.registry import (
+    cargar_modelo,
+    guardar_modelo,
+    registrar_experimento,
+    registrar_importancias,
+    registrar_promocion,
+)
 from ml.training import MODELOS, evaluar_por_folds
 from quality.contracts import validar_matriz_ml
 from utils.delta import leer_tabla_delta
@@ -63,6 +72,11 @@ class ConfiguracionModelo:
     target: str
     construir_features: Callable
     agregar_target: Callable
+    # La metrica de ranking que el quality gate exige que mejore (ver
+    # ml/promotion.py). Mismo criterio que app.py::_seccion_modelo: pr_auc
+    # para expulsiones (target desbalanceado, su baseline ES la prevalencia),
+    # roc_auc para goles (target balanceado).
+    metrica_principal: str
     validar_contrato: Callable | None = None
     baseline_extra: Callable | None = None   # ej. el mercado, en el de goles
 
@@ -162,7 +176,7 @@ def ejecutar_modelo(
             nombre, resumen[-1]["roc_auc"], resumen[-1]["pr_auc"], resumen[-1]["log_loss"],
         )
 
-    logger.info("[4/6] Entrenando el modelo de produccion ('%s')...", ML_MODELO_PRODUCCION)
+    logger.info("[4/7] Entrenando el modelo candidato ('%s')...", ML_MODELO_PRODUCCION)
     X, y = preparar_matriz(matriz, cfg.target)
     modelo = MODELOS[ML_MODELO_PRODUCCION]().fit(X, y)
 
@@ -188,9 +202,37 @@ def ejecutar_modelo(
             for k in ("pr_auc", "lift_pr_auc", "roc_auc", "log_loss", "brier")
         },
     }
+
+    # --- Quality gate: el candidato reemplaza al modelo en produccion? -----
+    #
+    # `cargar_modelo` puede no encontrar nada (primer entrenamiento): ese
+    # caso lo resuelve `evaluar_promocion` promoviendo siempre, no hace falta
+    # tratarlo distinto aca.
+    logger.info("[5/7] Quality gate: comparando contra el modelo en produccion...")
+    try:
+        _, metadata_actual = cargar_modelo(cfg.nombre, DIR_MODELOS)
+    except FileNotFoundError:
+        metadata_actual = None
+
+    decision = evaluar_promocion(
+        metadata["metricas"],
+        metadata_actual["metricas"] if metadata_actual else None,
+        metrica_principal=cfg.metrica_principal,
+        tolerancia_calibracion=ML_TOLERANCIA_CALIBRACION,
+    )
+    registrar_promocion(decision, cfg.nombre, DIR_PROMOCIONES_GOLD)
+
+    if not decision.promovido:
+        logger.warning("      RECHAZADO: %s", decision.razon)
+        logger.warning("      Se mantiene la version en produccion. No se guarda ningun modelo nuevo.")
+        df_resumen = pd.DataFrame(resumen)
+        print("\n" + df_resumen.round(4).to_string(index=False) + "\n")
+        return df_resumen
+
+    logger.info("      PROMOVIDO: %s", decision.razon)
     version = guardar_modelo(modelo, cfg.nombre, metadata, DIR_MODELOS)
 
-    logger.info("[5/6] Midiendo importancia por permutacion...")
+    logger.info("[6/7] Midiendo importancia por permutacion...")
     importancias = importancia_por_permutacion(
         modelo_evaluacion, X.iloc[idx_test_ultimo], y.iloc[idx_test_ultimo],
         n_repeticiones=20, semilla=0,
@@ -202,7 +244,7 @@ def ejecutar_modelo(
     )
     registrar_importancias(importancias, DIR_IMPORTANCIAS_GOLD, version, cfg.nombre)
 
-    logger.info("[6/6] Registrando experimentos en gold...")
+    logger.info("[7/7] Registrando experimentos en gold...")
     for nombre, folds in resultados_por_modelo.items():
         registrar_experimento(
             folds, {**metadata, "modelo": f"{cfg.nombre}:{nombre}"},
@@ -247,6 +289,9 @@ EXPULSIONES = ConfiguracionModelo(
     target=TARGET,
     construir_features=construir_features,
     agregar_target=agregar_target,
+    # Target desbalanceado (17%): su baseline ES la prevalencia, por eso
+    # manda el PR-AUC (mismo criterio que app.py::_seccion_modelo).
+    metrica_principal="pr_auc",
     validar_contrato=validar_matriz_ml,
 )
 
@@ -260,6 +305,8 @@ GOLES = ConfiguracionModelo(
         df, prior=prior, incluir_mercado=True
     ),
     agregar_target=agregar_target_goles,
+    # Target balanceado (53%): el ROC-AUC ya es legible.
+    metrica_principal="roc_auc",
     validar_contrato=lambda m: validar_matriz_ml(m, target=TARGET_GOLES),
     baseline_extra=_baseline_mercado,
 )

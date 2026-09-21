@@ -92,9 +92,16 @@ DIR_PARTIDOS_BRONZE = "data/bronze/thesportsdb/partidos"
 ML_MODELO_PRODUCCION = os.getenv("ML_MODELO_PRODUCCION", "logistico")
 ML_MIN_TEMPORADAS_TRAIN = int(os.getenv("ML_MIN_TEMPORADAS_TRAIN", "3"))
 
+# Quality gate (ml/promotion.py): cuanto puede empeorar el Brier del
+# candidato sin bloquear la promocion, aunque gane en la metrica principal.
+# Default conservador, no medido con bootstrap -- ver el docstring de
+# ml/promotion.py para el razonamiento completo.
+ML_TOLERANCIA_CALIBRACION = float(os.getenv("ML_TOLERANCIA_CALIBRACION", "0.01"))
+
 DIR_MODELOS            = "data/models"
 DIR_EXPERIMENTOS_GOLD  = "data/gold/ml/experimentos"
 DIR_IMPORTANCIAS_GOLD  = "data/gold/ml/importancias"
+DIR_PROMOCIONES_GOLD   = "data/gold/ml/promociones"
 NOMBRE_MODELO_EXPULSIONES = "expulsiones"
 NOMBRE_MODELO_GOLES       = "goles"
 

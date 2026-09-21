@@ -114,6 +114,42 @@ selección de features.
 
 ---
 
+### Quality gate — cuándo un reentrenamiento reemplaza al modelo en producción
+
+Antes de esto, `pipelines/ml_pipeline.py` guardaba una versión nueva en
+**cada** corrida — reentrenar y promover eran la misma acción. `ml/promotion.py`
+los separa: el candidato solo reemplaza al modelo en producción si
+
+1. su métrica principal mejora sobre la del modelo actual (`pr_auc` en
+   expulsiones, `roc_auc` en goles — mismo criterio que
+   `app.py::_seccion_modelo`), **y**
+2. el Brier no empeora más de una tolerancia (`config.ML_TOLERANCIA_CALIBRACION`,
+   default `0.01`).
+
+La condición (2) existe por un caso ya medido en este mismo proyecto: el
+`class_weight="balanced"` documentado en `ml/training.py` mejoraba el PR-AUC
+pero rompía la calibración (log-loss 0.6683 vs 0.4563). Sin el chequeo de
+Brier, ese modelo hubiera pasado el gate igual.
+
+Cada corrida — se promueva o no — queda registrada en
+`data/gold/ml/promociones`, visible en el Streamlit del modelo
+correspondiente ("Historial de promociones"). Un rechazo no borra nada: el
+`.joblib` candidato ni se guarda, así que `cargar_modelo` sigue devolviendo
+la versión anterior sin que nada más se entere.
+
+**Probado contra el pipeline real, no solo con mocks**: correr
+`python -m pipelines.ml_pipeline` con los mismos datos que ya entrenaron el
+modelo en producción da exactamente la misma métrica (el entrenamiento es
+determinístico) — el gate lo rechazó por empate, `pr_auc 0.2171 no supera al
+actual 0.2171`, y no se tocó ningún archivo en `data/models/`. Es el
+comportamiento correcto: un empate no es una mejora.
+
+**Por qué no es el Model Registry de MLflow**: mismo argumento que la sección
+anterior. MLflow resuelve "cuál versión es la de producción" con estados
+(Staging/Production) en un servidor propio; acá esa respuesta ya existe sin
+infraestructura nueva — es la versión más reciente en `data/models/` — así
+que promover es, literalmente, decidir si se llama a `guardar_modelo`.
+
 ### Tracking de experimentos
 
 En una tabla Delta de gold, `data/gold/ml/experimentos` — no en MLflow. Se
