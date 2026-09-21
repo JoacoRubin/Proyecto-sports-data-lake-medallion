@@ -127,6 +127,54 @@ puede auditar.
 
 ---
 
+## Servir los modelos — API de inferencia
+
+`ml/inference.py` existía desde antes, testeado y todo, pero no lo llamaba
+nadie: `app.py` solo mostraba la ficha y el historial de cada modelo, nunca
+predecía un partido nuevo. `services/inference_api/` es la puerta de entrada
+que faltaba — una capa HTTP delgada encima de `ml/inference.py` y
+`ml/registry.py`, sin reimplementar carga de modelos ni feature engineering.
+
+```bash
+python -m pip install -r requirements-api.txt
+uvicorn services.inference_api.main:app --reload
+```
+
+| Endpoint | Qué hace |
+|---|---|
+| `GET /health` | Liveness. No toca modelos ni Delta. |
+| `GET /models/{modelo}` | La ficha registrada (`expulsiones` o `goles`): features, prior, métricas, versión. |
+| `POST /predictions/{modelo}` | Predice un partido futuro. Ver `PartidoRequest` en `services/inference_api/schemas.py`. |
+
+```json
+POST /predictions/expulsiones
+{
+  "liga": "Spanish La Liga",
+  "temporada": "2024-2025",
+  "equipo_local": "Real Madrid",
+  "equipo_visitante": "Barcelona",
+  "fecha_partido": "2025-06-01"
+}
+```
+
+**El endpoint jamás entrena.** Carga el modelo aprobado que dejó
+`pipelines/ml_pipeline.py` en `data/models/` y solo infiere — entrenamiento e
+inferencia quedan en procesos y momentos distintos, así el modelo se puede
+versionar y desplegar sin depender del pipeline de entrenamiento.
+
+**Por qué una ruta genérica y no cuatro endpoints copiados**: el resto del
+proyecto ya resolvió "dos modelos, una sola maquinaria" con un runner
+genérico y dos configuraciones (`pipelines/ml_pipeline.py`,
+`app.py::_seccion_modelo`). Esta API sigue el mismo patrón en vez de duplicar
+rutas por modelo.
+
+**Por qué no se tocó la decisión de MLflow**: `ml/registry.py` ya la
+justifica con evidencia (tracking en Delta, cero infraestructura nueva). Este
+servicio consume esa misma capa de registro tal cual está — no había ninguna
+razón nueva para revisarla.
+
+---
+
 ## Modelo de goles (over 2.5) — contra el mercado
 
 ```bash

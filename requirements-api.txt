@@ -1,0 +1,13 @@
+# =============================================================================
+# Servicio de inferencia (services/inference_api). Separado del dashboard:
+# el deploy de la API no necesita streamlit/plotly, y el de Streamlit Cloud
+# no necesita un servidor ASGI.
+#
+# Instalar:  python -m pip install -r requirements-api.txt
+# Correr:    uvicorn services.inference_api.main:app --reload
+# =============================================================================
+
+-r requirements.txt
+
+fastapi==0.139.2
+uvicorn==0.51.0

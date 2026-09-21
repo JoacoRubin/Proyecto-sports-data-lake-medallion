@@ -1,10 +1,12 @@
 # =============================================================================
-# Entorno de desarrollo completo: núcleo + orquestación + streaming + tests.
+# Entorno de desarrollo completo: núcleo + orquestación + streaming + API + tests.
 #
 # Instalar:  python -m pip install -r requirements-dev.txt
 # =============================================================================
 
 -r requirements-orchestration.txt
 -r requirements-streaming.txt
+-r requirements-api.txt
 
 pytest==8.3.4
+httpx==0.28.1
