@@ -19,9 +19,11 @@ from ml.promotion import evaluar_promocion
 from ml.registry import (
     cargar_modelo,
     guardar_modelo,
+    leer_drift,
     leer_experimentos,
     leer_promociones,
     listar_versiones,
+    registrar_drift,
     registrar_experimento,
     registrar_promocion,
 )
@@ -205,3 +207,36 @@ def test_primer_entrenamiento_sin_modelo_actual_tambien_se_registra(tmp_path):
 
 def test_leer_promociones_inexistentes_devuelve_vacio(tmp_path):
     assert leer_promociones(str(tmp_path / "no_existe")).empty
+
+
+# --- Registro de drift (ver ml/drift.py) -------------------------------------
+def test_un_drift_detectado_queda_registrado(tmp_path):
+    from ml.drift import evaluar_drift_metricas
+    ruta = str(tmp_path / "drift")
+    v = evaluar_drift_metricas(
+        {"roc_auc": 0.50, "brier": 0.20}, {"roc_auc": 0.60, "brier": 0.20},
+        metrica_principal="roc_auc", n_partidos_frescos=30,
+    )
+    registrar_drift(v, "goles", ruta)
+
+    g = leer_drift(ruta)
+    assert len(g) == 1
+    assert bool(g["drift_detectado"].iloc[0]) is True
+    assert g["modelo"].iloc[0] == "goles"
+
+
+def test_un_veredicto_no_evaluado_tambien_se_registra(tmp_path):
+    """Saber que semanas no se pudo auditar (muestra insuficiente) importa
+    tanto como saber el resultado cuando si se pudo."""
+    from ml.drift import VeredictoDrift
+    ruta = str(tmp_path / "drift")
+    v = VeredictoDrift(evaluado=False, n_partidos_frescos=5, razon="muestra insuficiente")
+    registrar_drift(v, "expulsiones", ruta)
+
+    g = leer_drift(ruta)
+    assert bool(g["evaluado"].iloc[0]) is False
+    assert g["metrica_principal"].iloc[0] is None or pd.isna(g["metrica_principal"].iloc[0])
+
+
+def test_leer_drift_inexistente_devuelve_vacio(tmp_path):
+    assert leer_drift(str(tmp_path / "no_existe")).empty

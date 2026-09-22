@@ -30,18 +30,23 @@ import numpy as np
 import pandas as pd
 
 from config import (
+    DIR_DRIFT_GOLD,
     DIR_EXPERIMENTOS_GOLD,
     DIR_IMPORTANCIAS_GOLD,
     DIR_MODELOS,
     DIR_PARTIDOS_FOOTBALLDATA_BRONZE,
     DIR_PROMOCIONES_GOLD,
+    ML_DRIFT_MIN_PARTIDOS,
     ML_MIN_TEMPORADAS_TRAIN,
     ML_MODELO_PRODUCCION,
     ML_TOLERANCIA_CALIBRACION,
+    ML_TOLERANCIA_DRIFT_CALIBRACION,
+    ML_TOLERANCIA_DRIFT_RANKING,
     NOMBRE_MODELO_EXPULSIONES,
     NOMBRE_MODELO_GOLES,
 )
 from ml.dataset import columnas_features, preparar_matriz, splits_origen_movil
+from ml.drift import medir_drift
 from ml.evaluation import metricas
 from ml.features import TARGET, agregar_target, construir_features
 from ml.features_goles import (
@@ -54,6 +59,7 @@ from ml.promotion import evaluar_promocion
 from ml.registry import (
     cargar_modelo,
     guardar_modelo,
+    registrar_drift,
     registrar_experimento,
     registrar_importancias,
     registrar_promocion,
@@ -130,22 +136,22 @@ def ejecutar_modelo(
     logger.info("  Capa ML - Modelo de %s", cfg.nombre)
     logger.info("=" * 62)
 
-    logger.info("[1/6] Leyendo partidos desde bronze (football-data)...")
+    logger.info("[1/8] Leyendo partidos desde bronze (football-data)...")
     df = leer_tabla_delta(DIR_PARTIDOS_FOOTBALLDATA_BRONZE)
     logger.info("      Partidos: %d", len(df))
 
-    logger.info("[2/6] Construyendo features (sin leakage)...")
+    logger.info("[2/8] Construyendo features (sin leakage)...")
     prior = _prior_de_entrenamiento(df, cfg, min_temporadas)
     matriz = cfg.construir_features(df, prior=prior)
     features = columnas_features(matriz, cfg.target)
     logger.info("      Prior de entrenamiento: %.4f | features: %d", prior, len(features))
 
     if cfg.validar_contrato:
-        logger.info("[2.5/6] Validando el contrato de la matriz de features...")
+        logger.info("[2.5/8] Validando el contrato de la matriz de features...")
         cfg.validar_contrato(matriz)
         logger.info("      Contrato OK (sin columnas del propio partido).")
 
-    logger.info("[3/6] Evaluando con validacion de origen movil...")
+    logger.info("[3/8] Evaluando con validacion de origen movil...")
     resumen, resultados_por_modelo = [], {}
     vara = None
 
@@ -176,7 +182,7 @@ def ejecutar_modelo(
             nombre, resumen[-1]["roc_auc"], resumen[-1]["pr_auc"], resumen[-1]["log_loss"],
         )
 
-    logger.info("[4/7] Entrenando el modelo candidato ('%s')...", ML_MODELO_PRODUCCION)
+    logger.info("[4/8] Entrenando el modelo candidato ('%s')...", ML_MODELO_PRODUCCION)
     X, y = preparar_matriz(matriz, cfg.target)
     modelo = MODELOS[ML_MODELO_PRODUCCION]().fit(X, y)
 
@@ -203,17 +209,46 @@ def ejecutar_modelo(
         },
     }
 
+    # --- Drift: el modelo YA en produccion sigue sirviendo? -----------------
+    #
+    # Distinto del quality gate de abajo: no compara contra un candidato,
+    # audita al modelo desplegado contra partidos que jugo DESPUES de
+    # promoverse -- la porcion de realidad que ni el entrenamiento ni el
+    # gate original llegaron a ver. Corre ANTES de evaluar el candidato
+    # porque es una pregunta independiente (ver ml/drift.py).
+    logger.info("[5/8] Drift: el modelo en produccion sigue sirviendo?")
+    try:
+        modelo_actual, metadata_actual = cargar_modelo(cfg.nombre, DIR_MODELOS)
+    except FileNotFoundError:
+        modelo_actual, metadata_actual = None, None
+
+    if metadata_actual is not None:
+        # El prior CON el que el modelo en produccion se entreno, no uno
+        # recalculado hoy (mismo principio que ml/inference.py).
+        matriz_produccion = cfg.construir_features(df, prior=metadata_actual["prior"])
+        veredicto_drift = medir_drift(
+            modelo_actual, metadata_actual, matriz_produccion,
+            metrica_principal=cfg.metrica_principal,
+            tolerancia_ranking=ML_TOLERANCIA_DRIFT_RANKING,
+            tolerancia_calibracion=ML_TOLERANCIA_DRIFT_CALIBRACION,
+            min_partidos=ML_DRIFT_MIN_PARTIDOS,
+        )
+        registrar_drift(veredicto_drift, cfg.nombre, DIR_DRIFT_GOLD)
+        if not veredicto_drift.evaluado:
+            logger.info("      %s", veredicto_drift.razon)
+        elif veredicto_drift.drift_detectado:
+            logger.warning("      %s", veredicto_drift.razon)
+        else:
+            logger.info("      %s", veredicto_drift.razon)
+    else:
+        logger.info("      Sin modelo en produccion todavia: nada que auditar.")
+
     # --- Quality gate: el candidato reemplaza al modelo en produccion? -----
     #
     # `cargar_modelo` puede no encontrar nada (primer entrenamiento): ese
     # caso lo resuelve `evaluar_promocion` promoviendo siempre, no hace falta
     # tratarlo distinto aca.
-    logger.info("[5/7] Quality gate: comparando contra el modelo en produccion...")
-    try:
-        _, metadata_actual = cargar_modelo(cfg.nombre, DIR_MODELOS)
-    except FileNotFoundError:
-        metadata_actual = None
-
+    logger.info("[6/8] Quality gate: comparando contra el modelo en produccion...")
     decision = evaluar_promocion(
         metadata["metricas"],
         metadata_actual["metricas"] if metadata_actual else None,
@@ -232,7 +267,7 @@ def ejecutar_modelo(
     logger.info("      PROMOVIDO: %s", decision.razon)
     version = guardar_modelo(modelo, cfg.nombre, metadata, DIR_MODELOS)
 
-    logger.info("[6/7] Midiendo importancia por permutacion...")
+    logger.info("[7/8] Midiendo importancia por permutacion...")
     importancias = importancia_por_permutacion(
         modelo_evaluacion, X.iloc[idx_test_ultimo], y.iloc[idx_test_ultimo],
         n_repeticiones=20, semilla=0,
@@ -244,7 +279,7 @@ def ejecutar_modelo(
     )
     registrar_importancias(importancias, DIR_IMPORTANCIAS_GOLD, version, cfg.nombre)
 
-    logger.info("[7/7] Registrando experimentos en gold...")
+    logger.info("[8/8] Registrando experimentos en gold...")
     for nombre, folds in resultados_por_modelo.items():
         registrar_experimento(
             folds, {**metadata, "modelo": f"{cfg.nombre}:{nombre}"},

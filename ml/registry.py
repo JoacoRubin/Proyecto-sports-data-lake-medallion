@@ -33,6 +33,7 @@ import pandas as pd
 from utils.delta import asegurar_directorio, guardar_en_delta, leer_tabla_delta, tabla_delta_existe
 
 if TYPE_CHECKING:
+    from ml.drift import VeredictoDrift
     from ml.promotion import DecisionPromocion
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,41 @@ def registrar_promocion(decision: "DecisionPromocion", modelo: str, ruta_tabla: 
 
 def leer_promociones(ruta_tabla: str) -> pd.DataFrame:
     """Historial de decisiones del quality gate. Vacio si nunca corrio."""
+    if not tabla_delta_existe(ruta_tabla):
+        return pd.DataFrame()
+    return leer_tabla_delta(ruta_tabla)
+
+
+def registrar_drift(veredicto: "VeredictoDrift", modelo: str, ruta_tabla: str) -> None:
+    """Deja el veredicto del chequeo de drift en Delta (ver ml/drift.py).
+
+    Se registra tanto si se evaluo como si no (muestra insuficiente): saber
+    que semanas no se pudo auditar el modelo en produccion es tan relevante
+    como saber que semanas si.
+    """
+    fila = pd.DataFrame([{
+        "modelo":                       modelo,
+        "evaluado":                     veredicto.evaluado,
+        "drift_detectado":              veredicto.drift_detectado,
+        "n_partidos_frescos":           veredicto.n_partidos_frescos,
+        "razon":                        veredicto.razon,
+        "metrica_principal":            veredicto.metrica_principal,
+        "valor_reciente":               veredicto.valor_reciente,
+        "valor_original":               veredicto.valor_original,
+        "metrica_calibracion":          veredicto.metrica_calibracion,
+        "valor_calibracion_reciente":   veredicto.valor_calibracion_reciente,
+        "valor_calibracion_original":   veredicto.valor_calibracion_original,
+        "ejecutado_en":                 datetime.now(timezone.utc).isoformat(),
+    }])
+    guardar_en_delta(fila, ruta_tabla, modo="append", modo_esquema="merge")
+    logger.info(
+        "Drift registrado | modelo %s | evaluado=%s | drift_detectado=%s | %s",
+        modelo, veredicto.evaluado, veredicto.drift_detectado, veredicto.razon,
+    )
+
+
+def leer_drift(ruta_tabla: str) -> pd.DataFrame:
+    """Historial de chequeos de drift. Vacio si nunca corrio."""
     if not tabla_delta_existe(ruta_tabla):
         return pd.DataFrame()
     return leer_tabla_delta(ruta_tabla)

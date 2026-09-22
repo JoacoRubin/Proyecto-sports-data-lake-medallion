@@ -356,6 +356,12 @@ aws lambda update-function-code \
   --region sa-east-1
 ```
 
+**Gotcha post-deploy**: justo después de `update-function-code` con una
+imagen de ~1.2GB, las primeras invocaciones pueden tardar mucho más de lo
+normal o directamente devolver 503 — Lambda todavía está distribuyendo la
+imagen nueva por su infraestructura interna. Se resuelve solo en un par de
+minutos; no es necesario re-desplegar ni es un bug del código.
+
 **Setup del API Gateway** (una sola vez; `create-api --target` arma la
 integración, la ruta `$default` y el stage con auto-deploy en un solo
 comando, pero no agrega el permiso de invocación — eso es aparte):
@@ -433,9 +439,50 @@ Lambda, duración (avg/max/p95) con una línea de referencia en el timeout,
 concurrencia, y del lado de API Gateway requests/4xx/5xx y latencia
 (avg/p95).
 
-**Pendiente** (roadmap de Martín, próximos pasos): drift/model monitoring, y
-recién al final Terraform para dejar todo esto (Lambda, API Gateway, IAM,
-CloudWatch) como código en vez de comandos de `aws cli` corridos a mano.
+### Drift monitoring — ¿el modelo en producción sigue sirviendo?
+
+**El prerequisito que casi no estaba**: drift monitoring necesita partidos
+nuevos para tener algo que auditar. `FOOTBALLDATA_TEMPORADAS` se había
+quedado fija hasta la temporada 2024-2025 bastante después de que arrancara
+la 2025-2026 — el pipeline semanal (`refresh-ml.yml`) llevaba meses
+reentrenando contra exactamente el mismo dataset estático, sin que nada
+avisara porque la ingesta es idempotente (no duplica, pero tampoco trae
+partidos que no pidas). Se corrigió agregando las temporadas 2025-2026 y
+2026-2027 (en curso): **18.011 → 20.013 partidos**, 160 → 167 equipos.
+
+**`ml/drift.py`, distinto de `ml/promotion.py`**: la promoción compara un
+candidato recién entrenado contra la ficha histórica del modelo en
+producción, sobre los mismos folds de siempre. El drift monitoring hace una
+pregunta distinta — audita al modelo **que ya está sirviendo predicciones**
+contra los partidos que jugó **después** de promoverse, la porción de
+realidad que ni el entrenamiento ni el gate original llegaron a ver. Mismo
+`construir_features` de siempre, mismo `metadata["features"]` con el que
+ese modelo se entrenó (igual que `ml/inference.py`): no hay un camino de
+evaluación aparte que pueda divergir.
+
+Marca drift si la métrica principal cae más de una tolerancia **o** si el
+Brier empeora más de la suya — alcanza con una sola de las dos, a
+diferencia del quality gate de promoción, que exige que fallen ambas para
+rechazar un candidato: acá no se compite contra una alternativa, cualquier
+degradación real importa. Con menos de 20 partidos frescos, no hay
+veredicto (`evaluado=False`): una muestra así de chica es ruido, no señal,
+y decir "sin drift" en ese caso escondería el problema en vez de admitir
+que no se pudo medir.
+
+Corre cada domingo junto al reentrenamiento (`pipelines/ml_pipeline.py`), y
+el resultado queda auditable en `data/gold/ml/drift` y visible en el
+dashboard (`Historial de drift`, junto al de promociones) — igual que el
+resto del tracking de este proyecto, sin infraestructura nueva.
+
+**Notificación, a propósito, sin AWS todavía**: el veredicto queda en la
+tabla Delta y como `WARNING` en el log del GitHub Action si detecta drift.
+No está conectado al SNS de las alarmas de CloudWatch — eso requeriría
+credenciales de AWS nuevas viviendo en GitHub Actions, una decisión aparte
+que todavía no se tomó.
+
+**Pendiente** (roadmap de Martín, último paso): Terraform, para dejar todo
+esto (Lambda, API Gateway, IAM, CloudWatch, SNS) como código en vez de
+comandos de `aws cli` corridos a mano.
 
 ---
 

@@ -216,13 +216,14 @@ st.divider()
 st.subheader("🤖 Modelos")
 
 from config import (
+    DIR_DRIFT_GOLD,
     DIR_EXPERIMENTOS_GOLD,
     DIR_MODELOS,
     DIR_PROMOCIONES_GOLD,
     NOMBRE_MODELO_EXPULSIONES,
     NOMBRE_MODELO_GOLES,
 )
-from ml.registry import cargar_modelo, leer_experimentos, leer_promociones
+from ml.registry import cargar_modelo, leer_drift, leer_experimentos, leer_promociones
 
 
 @st.cache_data(show_spinner=False)
@@ -233,6 +234,11 @@ def cargar_experimentos() -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def cargar_promociones() -> pd.DataFrame:
     return leer_promociones(DIR_PROMOCIONES_GOLD)
+
+
+@st.cache_data(show_spinner=False)
+def cargar_drift() -> pd.DataFrame:
+    return leer_drift(DIR_DRIFT_GOLD)
 
 
 @st.cache_data(show_spinner=False)
@@ -328,6 +334,28 @@ def _seccion_modelo(nombre: str, descripcion: str, metrica_clave: str, vara: str
                           "valor_candidato", "valor_actual", "razon"]
             st.dataframe(
                 del_modelo_promo[[c for c in cols_promo if c in del_modelo_promo.columns]]
+                .sort_values("ejecutado_en", ascending=False).round(4),
+                hide_index=True, use_container_width=True,
+            )
+
+    drift = cargar_drift()
+    del_modelo_drift = (
+        drift[drift["modelo"] == nombre] if not drift.empty else drift
+    )
+    if not del_modelo_drift.empty:
+        with st.expander("Historial de drift (modelo en producción)"):
+            st.caption(
+                "Cada corrida audita al modelo QUE YA ESTÁ SIRVIENDO contra los "
+                "partidos que jugó desde que se promovió — no contra un candidato "
+                "(eso es el quality gate de arriba). Con pocos partidos frescos "
+                "queda `evaluado=False`: una muestra chica es ruido, no señal "
+                "(`ml/drift.py`)."
+            )
+            cols_drift = ["ejecutado_en", "evaluado", "drift_detectado",
+                          "n_partidos_frescos", "metrica_principal",
+                          "valor_reciente", "valor_original", "razon"]
+            st.dataframe(
+                del_modelo_drift[[c for c in cols_drift if c in del_modelo_drift.columns]]
                 .sort_values("ejecutado_en", ascending=False).round(4),
                 hide_index=True, use_container_width=True,
             )

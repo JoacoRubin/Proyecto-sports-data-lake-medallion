@@ -98,10 +98,18 @@ ML_MIN_TEMPORADAS_TRAIN = int(os.getenv("ML_MIN_TEMPORADAS_TRAIN", "3"))
 # ml/promotion.py para el razonamiento completo.
 ML_TOLERANCIA_CALIBRACION = float(os.getenv("ML_TOLERANCIA_CALIBRACION", "0.01"))
 
+# Drift monitoring (ml/drift.py): mismo criterio de tolerancia conservadora
+# no medida con bootstrap que ML_TOLERANCIA_CALIBRACION, pero para el modelo
+# YA en produccion contra la realidad mas nueva, no contra un candidato.
+ML_TOLERANCIA_DRIFT_RANKING     = float(os.getenv("ML_TOLERANCIA_DRIFT_RANKING", "0.05"))
+ML_TOLERANCIA_DRIFT_CALIBRACION = float(os.getenv("ML_TOLERANCIA_DRIFT_CALIBRACION", "0.01"))
+ML_DRIFT_MIN_PARTIDOS           = int(os.getenv("ML_DRIFT_MIN_PARTIDOS", "20"))
+
 DIR_MODELOS            = "data/models"
 DIR_EXPERIMENTOS_GOLD  = "data/gold/ml/experimentos"
 DIR_IMPORTANCIAS_GOLD  = "data/gold/ml/importancias"
 DIR_PROMOCIONES_GOLD   = "data/gold/ml/promociones"
+DIR_DRIFT_GOLD         = "data/gold/ml/drift"
 NOMBRE_MODELO_EXPULSIONES = "expulsiones"
 NOMBRE_MODELO_GOLES       = "goles"
 
