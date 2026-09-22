@@ -480,9 +480,62 @@ No está conectado al SNS de las alarmas de CloudWatch — eso requeriría
 credenciales de AWS nuevas viviendo en GitHub Actions, una decisión aparte
 que todavía no se tomó.
 
-**Pendiente** (roadmap de Martín, último paso): Terraform, para dejar todo
-esto (Lambda, API Gateway, IAM, CloudWatch, SNS) como código en vez de
-comandos de `aws cli` corridos a mano.
+### Terraform — toda la infra de AWS, como código
+
+Vive en `terraform/`. Codifica exactamente lo que ya estaba corriendo en
+producción: rol IAM, repo ECR, Lambda, API Gateway, log group, cuatro
+alarmas, dashboard y el topic de SNS. Se armó importando los recursos
+reales (`terraform import`), no recreándolos — recrear el API Gateway le
+hubiera cambiado la URL pública a mitad de sesión.
+
+**State local, sin backend remoto**: proyecto de un solo operador en una
+sola máquina. Un backend en S3+DynamoDB resuelve colaboración entre varios
+operadores — infraestructura de más para este caso (ver `versions.tf`).
+
+**Dos prefijos de nombre, no uno**: ECR, Lambda, API Gateway y el dashboard
+se llaman `sports-ml-inference-api`; el rol IAM, el topic de SNS y las
+alarmas se llaman `sports-ml-inference-*` (sin el `-api`). No es un
+capricho — así quedaron nombrados cuando se crearon a mano por CLI durante
+la sesión, y Terraform importa lo que existe, no lo que hubiera sido más
+prolijo (ver `locals.tf`).
+
+**Dos bugs reales que aparecieron armando esto**:
+
+1. `terraform import` rechaza integración, ruta y stage de un HTTP API
+   creado con el atajo `create-api --target` (quedan marcados
+   `ApiGatewayManaged: true`, y el provider lo bloquea explícitamente con
+   `Error: ... was created via quick create`). Se resuelve borrando esos
+   tres recursos y recreándolos como recursos normales
+   (`create-integration`/`create-route`/`create-stage` sueltos, mismo
+   `api_id` — la URL pública no cambia) para que Terraform los pueda
+   adoptar.
+2. `aws cloudwatch put-dashboard` en Windows corrompía los guiones largos
+   (`—`) del título de cada widget a `â€”` — un mojibake de doble
+   codificación UTF-8, aparentemente del propio AWS CLI en Python sobre
+   Windows (ni `PYTHONUTF8=1` ni `fileb://` lo arreglaron). El `get-dashboard`
+   del mismo CLI lo mostraba "bien" porque revertía la misma corrupción al
+   leer — el bug quedó invisible hasta que Terraform (SDK de Go, sin ese
+   bug) leyó el valor real guardado en AWS. Se solucionó llamando a
+   `boto3` directo desde Python, leyendo el JSON con `encoding="utf-8"`
+   explícito, sin pasar por el binario `aws` para nada que tenga texto no
+   ASCII.
+
+**Estado real al cerrar esta etapa**: todo importado y con `terraform plan`
+en cero **excepto** dos cosas que dependen de una acción manual y quedan
+documentadas, no escondidas:
+
+- La suscripción de mail a SNS sigue sin confirmar
+  (`SubscriptionsConfirmed: 0`) — hace falta clickear el link que mandó AWS
+  antes de poder importarla (Terraform no puede leer una suscripción
+  `PendingConfirmation`).
+- Integración/ruta/stage del API Gateway todavía son las del quick-create
+  original: el comando que las reemplaza por versiones importables borra y
+  recrea recursos en vivo, y el clasificador de seguridad de Claude Code lo
+  bloqueó a propósito (`Modify Shared Resources`) — corresponde correrlo a
+  mano, no que un agente lo haga sin que el humano lo vea.
+
+Con eso resuelto, `terraform plan` da `No changes` completo y el roadmap de
+Martín queda cerrado.
 
 ---
 
