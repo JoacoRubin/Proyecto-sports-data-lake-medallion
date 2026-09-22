@@ -12,7 +12,7 @@ y un dashboard interactivo.
 - **Dashboard**: Streamlit + Plotly (tabla, KPIs, bubble chart).
 - **Extra**: streaming con Kafka (Aiven) que ingesta a la misma capa bronze.
 - **Multi-fuente**: segunda ingesta desde football-data.co.uk (histórico + estadísticas).
-- **ML**: dos modelos sobre 18.011 partidos —expulsiones y over 2.5 goles—, este último medido contra el mercado de apuestas.
+- **ML**: dos modelos sobre 20.013 partidos —expulsiones y over 2.5 goles—, este último medido contra el mercado de apuestas.
 
 ---
 
@@ -541,11 +541,19 @@ Configurable por entorno (valores por defecto en `config.py`):
 
 ```bash
 FOOTBALLDATA_DIVISIONES=E0,SP1,I1,D1,F1
-FOOTBALLDATA_TEMPORADAS=1516,1617,1718,1819,1920,2021,2122,2223,2324,2425
+FOOTBALLDATA_TEMPORADAS=1516,1617,1718,1819,1920,2021,2122,2223,2324,2425,2526,2627
 ```
 
-Resultado de la carga por defecto: **18.011 partidos**, 10 temporadas
-(2015-2025), 160 equipos, 5 ligas → `data/bronze/footballdata/partidos`.
+Resultado de la carga por defecto: **20.013 partidos**, 12 temporadas
+(2015-2027, incluida la temporada en curso), 167 equipos, 5 ligas →
+`data/bronze/footballdata/partidos`.
+
+**Gotcha real**: `FOOTBALLDATA_TEMPORADAS` se quedó fija en `...2425` (hasta
+2024-2025) bastante después de que arrancara la temporada 2025-2026 — el
+pipeline semanal (`refresh-ml.yml`) llevaba meses reentrenando contra
+exactamente el mismo dataset estático, sin que nada avisara porque no rompía
+nada, solo dejaba de traer partidos nuevos. Se encontró armando el drift
+monitoring (ver más abajo): sin esto, no había datos nuevos que vigilar.
 
 **Idempotencia**: el CSV no trae ids, así que se sintetizan por hash del
 partido (`FD-` + sha1 de división, temporada, fecha y equipos normalizados).
