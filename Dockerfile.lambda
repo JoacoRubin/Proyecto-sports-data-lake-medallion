@@ -1,0 +1,31 @@
+# =============================================================================
+# Dockerfile.lambda — services/inference_api empaquetado para AWS Lambda.
+#
+# Por que no parte de la imagen base oficial `public.ecr.aws/lambda/python`:
+# requirements.txt fija numpy==2.5.1, que solo publica wheels para cp314 (ver
+# Dockerfile.api), y no hay garantia de que AWS ya publique esa version como
+# base de Lambda. En vez de apostar a eso, se arma un runtime custom sobre la
+# misma imagen que ya usan Dockerfile.api/Dockerfile.dashboard
+# (`python:3.14-slim`) agregando el Runtime Interface Client (awslambdaric) --
+# patron soportado oficialmente por AWS para bases no-Amazon.
+#
+# Build:  docker build -f Dockerfile.lambda -t sports-ml-inference-api .
+# Probar el handler localmente sin RIE: ver README, seccion "Deploy en AWS".
+# =============================================================================
+
+FROM python:3.14-slim
+
+WORKDIR /var/task
+
+# Misma separacion de capas que Dockerfile.api: dependencias antes que
+# codigo para no invalidar la cache de pip en cada cambio.
+COPY requirements.txt requirements-api.txt requirements-lambda.txt .
+RUN pip install --no-cache-dir -r requirements-lambda.txt
+
+# Necesita config.py, ml/, utils/, services/ y los datos versionados en
+# data/models/ + data/bronze/footballdata/ (13MB + 212KB: entran comodos en
+# la imagen, no hace falta EFS ni leerlos de S3 en cada cold start).
+COPY . .
+
+ENTRYPOINT ["python", "-m", "awslambdaric"]
+CMD ["services.inference_api.lambda_handler.handler"]

@@ -241,13 +241,143 @@ cuando no encuentra la versión.
 cada servicio instala solo lo que necesita, y uno puede reconstruirse sin
 invalidar la cache del otro.
 
-**Limitación conocida**: esto resuelve "correr los dos servicios juntos
-localmente". Streamlit Community Cloud (donde el dashboard está deployado
-hoy) sigue sirviendo un solo proceso — la inference API todavía no tiene
-deploy propio, así que en producción esa sección del dashboard muestra el
-error de conexión hasta que eso pase (el siguiente paso natural del roadmap:
-un host para la API, y recién ahí `INFERENCE_API_URL` en el deploy real de
-Streamlit Cloud apunta a esa URL en vez de a un contenedor local).
+Esto resuelve "correr los dos servicios juntos localmente". Streamlit
+Community Cloud (donde el dashboard está deployado hoy) sigue sirviendo un
+solo proceso — por eso la inference API tiene su propio deploy en AWS Lambda,
+ver la sección siguiente.
+
+### Deploy en AWS Lambda — la inference API en producción
+
+**Por qué Lambda y no ECS/App Runner/EC2**: el tráfico de esta API es
+esporádico (alguien abre el dashboard y pide una predicción), no continuo.
+Lambda escala a cero entre invocaciones: costo ≈ 0 cuando nadie la usa,
+contra un piso fijo mensual de las alternativas administradas. El costo es
+un cold start de unos segundos la primera vez que se invoca tras un rato de
+inactividad.
+
+**Por qué API Gateway y no Function URL**: la idea original era exponer la
+Lambda directo con una Function URL (`auth-type NONE`) — más simple, un
+recurso menos. En la práctica, esta cuenta de AWS devolvía **403 Forbidden**
+en toda invocación anónima pese a que el resource policy estaba bien armado
+(`lambda:InvokeFunctionUrl` para principal `*`, condición
+`FunctionUrlAuthType: NONE` — la config exacta que pide la documentación).
+Confirmado con los logs de CloudWatch: el log group ni existía, es decir,
+la invocación se frenaba en el borde, antes de llegar a ejecutar la función.
+Es una restricción anti-abuso a nivel de cuenta sobre Function URLs públicas,
+independiente de IAM, y la única forma de sacarla es un caso de soporte a
+AWS. En vez de esperar eso, la Lambda quedó detrás de un **API Gateway HTTP
+API** (`apigatewayv2 create-api --target <lambda-arn>`, quick-create):
+mismo `lambda_handler.py` sin tocar una línea, porque Function URL y HTTP
+API v2 comparten el mismo formato de payload que ya entiende `mangum`. Un
+paso extra de setup (`add-permission` para `apigateway.amazonaws.com`,
+acotado por `source-arn` a este API), pero sin depender de que AWS levante
+una restricción de cuenta.
+
+**Por qué una imagen custom y no `public.ecr.aws/lambda/python`**:
+`requirements.txt` fija `numpy==2.5.1`, que solo publica wheels `cp314` (ver
+más arriba), y no hay garantía de que la imagen base oficial de Lambda ya
+publique esa versión de Python. `Dockerfile.lambda` arma un runtime custom
+sobre el mismo `python:3.14-slim` que ya usan `Dockerfile.api` y
+`Dockerfile.dashboard`, agregando el Runtime Interface Client
+(`awslambdaric`) — patrón soportado oficialmente por AWS para bases no-Amazon.
+`services/inference_api/lambda_handler.py` adapta la misma app de FastAPI con
+`mangum`, sin tocar `main.py`: un solo código de negocio, tres formas de
+invocarlo (uvicorn local, Docker Compose, Lambda).
+
+Los 13MB de histórico (`data/bronze/footballdata/`) y los 212KB de modelos
+(`data/models/`) entran cómodos dentro de la imagen — no hace falta EFS ni
+leerlos de S3 en cada cold start.
+
+**Tres bugs reales que aparecieron armando esto** (documentados porque no son
+obvios):
+
+1. `mangum==0.19.0` rompe en Python 3.14 con
+   `RuntimeError: There is no current event loop in thread 'MainThread'`.
+   Llama `asyncio.get_event_loop()` fuera de un loop corriendo, y 3.14
+   finalmente eliminó el auto-create implícito (deprecado desde 3.10). Fix:
+   `mangum==0.21.0` (feb 2026), que agregó soporte real para 3.14 — ver el
+   comentario en `requirements-lambda.txt`, no bajar ese pin.
+2. `docker build` con BuildKit genera por defecto un manifest OCI con
+   attestations de provenance/SBOM que Lambda todavía no acepta para
+   imágenes de contenedor (`InvalidParameterValueException: image manifest
+   ... not supported`). Fix: buildear con
+   `docker buildx build --provenance=false --sbom=false`.
+3. Cold start fallaba con `Status: timeout` en la fase `init` de
+   CloudWatch, a los ~10 segundos justos. Lambda impone un **tope duro de 10s
+   para la fase INIT** (imports a nivel de módulo, antes de que corra el
+   handler) que no depende del timeout configurado de la función — y
+   `import numpy/pandas/scikit-learn` en frío tarda más que eso con 1024MB
+   (que en Lambda determina también la CPU asignada). La carga del histórico
+   ya era lazy (`lru_cache` en `dependencies.py`), así que no era eso: eran
+   los imports pesados mismos. Fix: subir memoria a 3008MB — más memoria =
+   más CPU proporcional también durante INIT, no solo durante la ejecución.
+
+**Build y deploy** (imagen ya construida y funcionando en
+`sports-ml-inference-api`, para reconstruir tras un cambio):
+
+```bash
+docker buildx build --provenance=false --sbom=false --load \
+  -f Dockerfile.lambda -t sports-ml-inference-api:latest .
+
+aws ecr get-login-password --region sa-east-1 | \
+  docker login --username AWS --password-stdin \
+  821672147613.dkr.ecr.sa-east-1.amazonaws.com
+
+docker tag sports-ml-inference-api:latest \
+  821672147613.dkr.ecr.sa-east-1.amazonaws.com/sports-ml-inference-api:latest
+docker push \
+  821672147613.dkr.ecr.sa-east-1.amazonaws.com/sports-ml-inference-api:latest
+
+aws lambda update-function-code \
+  --function-name sports-ml-inference-api \
+  --image-uri 821672147613.dkr.ecr.sa-east-1.amazonaws.com/sports-ml-inference-api:latest \
+  --region sa-east-1
+```
+
+**Setup del API Gateway** (una sola vez; `create-api --target` arma la
+integración, la ruta `$default` y el stage con auto-deploy en un solo
+comando, pero no agrega el permiso de invocación — eso es aparte):
+
+```bash
+aws apigatewayv2 create-api \
+  --name sports-ml-inference-api \
+  --protocol-type HTTP \
+  --target arn:aws:lambda:sa-east-1:821672147613:function:sports-ml-inference-api \
+  --region sa-east-1
+
+aws lambda add-permission \
+  --function-name sports-ml-inference-api \
+  --statement-id ApiGatewayInvoke \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:sa-east-1:821672147613:<api-id>/*/*" \
+  --region sa-east-1
+```
+
+**Recursos** (región `sa-east-1`, cuenta `821672147613`): rol IAM
+`sports-ml-inference-lambda-role` (solo `AWSLambdaBasicExecutionRole` — logs
+a CloudWatch, nada más), repo ECR `sports-ml-inference-api` con
+scan-on-push, función Lambda `sports-ml-inference-api` (3008MB, timeout 45s
+— ver el bug #3 de arriba sobre por qué no quedó en 1024MB/30s), y el HTTP
+API `sports-ml-inference-api` sin auth propia (la API en sí es de solo
+lectura/predicción, sin cookies ni datos sensibles — no hay nada que
+proteger con un API key todavía).
+
+**Latencia real** medida contra la URL pública: **~17.4s en cold start**
+(imports pesados + primera lectura del histórico) y **~740ms en caliente**
+(mismo entorno de ejecución, todo ya cacheado en memoria del proceso).
+
+Para que el dashboard en Streamlit Community Cloud le pegue a esta API en
+vez de a `localhost`, la URL del API Gateway
+(`https://bfpdri7tfg.execute-api.sa-east-1.amazonaws.com`) va como secret
+`INFERENCE_API_URL` en la config de la app en Streamlit Cloud (Settings →
+Secrets) — `config.py` ya lee esa variable de entorno, Streamlit Cloud
+expone los secrets también como env vars, no hace falta tocar código.
+
+**Pendiente** (roadmap de Martín, próximos pasos): CloudWatch más allá de los
+logs básicos (dashboards, alarmas de error rate / latencia), drift/model
+monitoring, y recién al final Terraform para dejar todo esto como código en
+vez de comandos de `aws cli` corridos a mano.
 
 ---
 

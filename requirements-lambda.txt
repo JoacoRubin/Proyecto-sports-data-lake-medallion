@@ -1,0 +1,14 @@
+# =============================================================================
+# Deploy en AWS Lambda (services/inference_api). Mismo servicio FastAPI que
+# requirements-api.txt, mas el adaptador ASGI->Lambda (mangum) y el Runtime
+# Interface Client (awslambdaric) que necesita una imagen custom -- ver
+# Dockerfile.lambda para por que no partimos de la imagen base oficial de AWS.
+# =============================================================================
+
+-r requirements-api.txt
+
+# mangum<0.21.0 rompe en Python 3.14: llama asyncio.get_event_loop() fuera de
+# un loop corriendo, y 3.14 elimino el auto-create implicito (deprecado desde
+# 3.10). 0.21.0 agrego soporte real para 3.14 -- no bajar este pin.
+mangum==0.21.0
+awslambdaric==3.1.1
