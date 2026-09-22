@@ -1,0 +1,26 @@
+# =============================================================================
+# Dependencias realmente compartidas entre dashboard, pipelines y la
+# inference API: procesamiento, Delta Lake, calidad de datos y ML. NO
+# incluye streamlit/plotly -- eso es exclusivo del dashboard (ver
+# requirements.txt) y no tiene por que viajar en el build de la API/Lambda,
+# que nunca los importa.
+#
+# Instalar:  python -m pip install -r requirements-core.txt
+# =============================================================================
+
+# Procesamiento y data lake
+pandas==2.3.3
+deltalake==1.6.2
+pyarrow==24.0.0
+numpy==2.5.1
+requests==2.32.5
+python-dotenv==1.2.2
+
+# Calidad de datos / contratos entre capas
+pandera==0.32.1
+
+# Machine Learning (modelo de expulsiones y goles).
+# scikit-learn tiene wheel cp314; se eligio sobre xgboost/lightgbm para no
+# sumar ~150MB de binario compilado a un build que ya esta ajustado.
+scikit-learn==1.9.0
+joblib==1.5.3

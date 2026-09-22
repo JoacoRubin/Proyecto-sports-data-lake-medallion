@@ -18,8 +18,10 @@ FROM python:3.14-slim
 WORKDIR /var/task
 
 # Misma separacion de capas que Dockerfile.api: dependencias antes que
-# codigo para no invalidar la cache de pip en cada cambio.
-COPY requirements.txt requirements-api.txt requirements-lambda.txt .
+# codigo para no invalidar la cache de pip en cada cambio. requirements-api
+# depende de requirements-core.txt, no de requirements.txt (ese arrastra
+# streamlit+plotly, ~135MB que esta imagen nunca necesita).
+COPY requirements-core.txt requirements-api.txt requirements-lambda.txt .
 RUN pip install --no-cache-dir -r requirements-lambda.txt
 
 # Necesita config.py, ml/, utils/, services/ y los datos versionados en

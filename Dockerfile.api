@@ -18,8 +18,10 @@ WORKDIR /app
 
 # Capa de dependencias separada del codigo: cachea entre builds mientras los
 # requirements no cambien, aunque el codigo si. requirements-api.txt hace
-# `-r requirements.txt`, asi que los dos tienen que estar antes del pip install.
-COPY requirements.txt requirements-api.txt .
+# `-r requirements-core.txt` (no requirements.txt: ese arrastra streamlit y
+# plotly, que esta API nunca importa), asi que los dos tienen que estar antes
+# del pip install.
+COPY requirements-core.txt requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
 # El servicio necesita config.py, ml/, utils/, services/ y los modelos ya

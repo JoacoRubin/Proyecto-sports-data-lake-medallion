@@ -11,24 +11,10 @@
 # Instalar:  python -m pip install -r requirements.txt
 # =============================================================================
 
-# Procesamiento y data lake
-pandas==2.3.3
-deltalake==1.6.2
-pyarrow==24.0.0
-numpy==2.5.1
-requests==2.32.5
-python-dotenv==1.2.2
+-r requirements-core.txt
 
-# Calidad de datos / contratos entre capas
-pandera==0.32.1
-
-# Machine Learning (modelo de expulsiones).
-# Va en el build del dashboard porque app.py carga el modelo entrenado.
-# scikit-learn tiene wheel cp314; se eligio sobre xgboost/lightgbm para no
-# sumar ~150MB de binario compilado a un build que ya esta ajustado.
-scikit-learn==1.9.0
-joblib==1.5.3
-
-# Dashboard / visualización
+# Dashboard / visualización -- exclusivo de este archivo. requirements-api.txt
+# depende de requirements-core.txt, no de este, para no arrastrar ~135MB de
+# streamlit+plotly a un build (API/Lambda) que nunca los importa.
 streamlit==1.60.0
 plotly==6.9.0

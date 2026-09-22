@@ -286,7 +286,29 @@ invocarlo (uvicorn local, Docker Compose, Lambda).
 
 Los 13MB de histórico (`data/bronze/footballdata/`) y los 212KB de modelos
 (`data/models/`) entran cómodos dentro de la imagen — no hace falta EFS ni
-leerlos de S3 en cada cold start.
+leerlos de S3 en cada cold start (mover esos 13MB a S3 no cambiaría nada: lo
+que pesa la imagen no es la data, son las librerías, ver abajo).
+
+**Tamaño de la imagen — de 1.44GB a 1.19GB**: `requirements-api.txt` hacía
+`-r requirements.txt`, que **también** trae `streamlit` y `plotly` (deps
+exclusivas del dashboard) aunque la API nunca las importa — pese a que el
+propio comentario del archivo decía "no necesita streamlit/plotly". Se
+separaron las dependencias realmente compartidas a `requirements-core.txt`
+(pandas, deltalake, pyarrow, numpy, scikit-learn, pandera) y ahora
+`requirements.txt` (dashboard) y `requirements-api.txt` (API/Lambda) parten
+de ese archivo en vez de uno del otro. Ahorro real: ~250MB (streamlit +
+plotly + sus dependencias — altair, pydeck, pillow.libs).
+
+**Por qué no se llega a menos de 500MB**: `pyarrow` (153MB) + `deltalake`
+(123MB) + `scipy` (110MB) + `pandas` (77MB) + `scikit-learn` (49MB) +
+`numpy` (43MB) sola ya suman 555MB — son las librerías que la API
+efectivamente ejecuta (Delta Lake + feature engineering + inferencia), no
+hay grasa ahí para cortar sin cambiar de arquitectura. Se podría sacar
+`deltalake` leyendo un Parquet plano pre-exportado en vez del formato Delta
+completo, pero eso significa un código de lectura distinto para la API que
+para el resto del proyecto — exactamente lo que este proyecto evita en
+todos lados (un solo código de negocio, no duplicar lógica) — a cambio de
+ahorrar centavos de dólar al mes en storage de ECR. No vale la pena.
 
 **Tres bugs reales que aparecieron armando esto** (documentados porque no son
 obvios):
@@ -363,9 +385,10 @@ API `sports-ml-inference-api` sin auth propia (la API en sí es de solo
 lectura/predicción, sin cookies ni datos sensibles — no hay nada que
 proteger con un API key todavía).
 
-**Latencia real** medida contra la URL pública: **~17.4s en cold start**
-(imports pesados + primera lectura del histórico) y **~740ms en caliente**
-(mismo entorno de ejecución, todo ya cacheado en memoria del proceso).
+**Latencia real** medida contra la URL pública (imagen de 1.19GB, post
+recorte de streamlit/plotly): **~15.8s en cold start** (imports pesados +
+primera lectura del histórico) y **~466ms en caliente** (mismo entorno de
+ejecución, todo ya cacheado en memoria del proceso).
 
 Para que el dashboard en Streamlit Community Cloud le pegue a esta API en
 vez de a `localhost`, la URL del API Gateway
