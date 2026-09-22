@@ -397,10 +397,45 @@ vez de a `localhost`, la URL del API Gateway
 Secrets) — `config.py` ya lee esa variable de entorno, Streamlit Cloud
 expone los secrets también como env vars, no hace falta tocar código.
 
-**Pendiente** (roadmap de Martín, próximos pasos): CloudWatch más allá de los
-logs básicos (dashboards, alarmas de error rate / latencia), drift/model
-monitoring, y recién al final Terraform para dejar todo esto como código en
-vez de comandos de `aws cli` corridos a mano.
+### CloudWatch — alarmas y dashboard
+
+Los logs básicos (`AWSLambdaBasicExecutionRole`) ya estaban desde el deploy
+inicial. Lo que faltaba era **enterarse** cuando algo falla, sin tener que
+entrar a leer logs a mano, y no dejar los logs creciendo para siempre.
+
+**Retención de logs**: por defecto, un log group de Lambda **nunca expira**
+(`retentionInDays: null`) — con el tiempo junta storage por logs que a los
+pocos meses no le sirven a nadie. Se fijó en 14 días:
+
+```bash
+aws logs put-retention-policy \
+  --log-group-name /aws/lambda/sports-ml-inference-api \
+  --retention-in-days 14 \
+  --region sa-east-1
+```
+
+**Alarmas** (SNS topic `sports-ml-inference-alerts`, con notificación por
+mail — hace falta confirmar la suscripción desde el mail que manda AWS la
+primera vez):
+
+| Alarma | Métrica | Dispara si |
+|---|---|---|
+| `sports-ml-inference-lambda-errors` | `AWS/Lambda Errors` | Cualquier error en 5 min |
+| `sports-ml-inference-lambda-throttles` | `AWS/Lambda Throttles` | Cualquier throttle en 5 min (concurrencia insuficiente) |
+| `sports-ml-inference-lambda-duration-alta` | `AWS/Lambda Duration` (max) | Una invocación tarda más de 35s (el timeout está en 45s — es aviso temprano antes de que empiecen los timeouts reales) |
+| `sports-ml-inference-apigw-5xx` | `AWS/ApiGateway 5xxError` | Cualquier 5xx del API Gateway en 5 min |
+
+Umbral en 0 (no en un porcentaje de error rate) a propósito: es una API de
+tráfico bajo, un solo error ya es una señal real, no ruido estadístico.
+
+**Dashboard** `sports-ml-inference-api`: invocaciones/errores/throttles de
+Lambda, duración (avg/max/p95) con una línea de referencia en el timeout,
+concurrencia, y del lado de API Gateway requests/4xx/5xx y latencia
+(avg/p95).
+
+**Pendiente** (roadmap de Martín, próximos pasos): drift/model monitoring, y
+recién al final Terraform para dejar todo esto (Lambda, API Gateway, IAM,
+CloudWatch) como código en vez de comandos de `aws cli` corridos a mano.
 
 ---
 
