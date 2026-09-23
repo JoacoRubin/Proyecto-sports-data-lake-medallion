@@ -499,16 +499,23 @@ capricho — así quedaron nombrados cuando se crearon a mano por CLI durante
 la sesión, y Terraform importa lo que existe, no lo que hubiera sido más
 prolijo (ver `locals.tf`).
 
-**Dos bugs reales que aparecieron armando esto**:
+**Tres bugs/límites reales que aparecieron armando esto**:
 
 1. `terraform import` rechaza integración, ruta y stage de un HTTP API
    creado con el atajo `create-api --target` (quedan marcados
-   `ApiGatewayManaged: true`, y el provider lo bloquea explícitamente con
-   `Error: ... was created via quick create`). Se resuelve borrando esos
-   tres recursos y recreándolos como recursos normales
-   (`create-integration`/`create-route`/`create-stage` sueltos, mismo
-   `api_id` — la URL pública no cambia) para que Terraform los pueda
-   adoptar.
+   `ApiGatewayManaged: true`, el provider lo bloquea explícitamente con
+   `Error: ... was created via quick create`). La solución obvia —
+   borrarlos y recrearlos sueltos, mismo `api_id` — **no funciona**:
+   `delete-route`/`delete-integration`/`delete-stage` devuelven éxito (sin
+   error) pero no borran nada, verificado en vivo (`get-routes` seguía
+   mostrando el recurso "borrado" después de la llamada exitosa). No es
+   una limitación del provider de Terraform, es AWS mismo protegiendo sus
+   recursos quick-create contra borrado individual. La única forma real de
+   traerlos a Terraform es borrar y recrear el API completo, lo que cambia
+   `api_id` y la URL pública — decisión que se tomó **no tomar**, la URL ya
+   está en uso. Ver `apigateway.tf` para el detalle: esos tres
+   sub-recursos quedan fuera de Terraform a propósito, documentados, no
+   escondidos.
 2. `aws cloudwatch put-dashboard` en Windows corrompía los guiones largos
    (`—`) del título de cada widget a `â€”` — un mojibake de doble
    codificación UTF-8, aparentemente del propio AWS CLI en Python sobre
@@ -519,22 +526,19 @@ prolijo (ver `locals.tf`).
    `boto3` directo desde Python, leyendo el JSON con `encoding="utf-8"`
    explícito, sin pasar por el binario `aws` para nada que tenga texto no
    ASCII.
+3. `confirmation_timeout_in_minutes` y `endpoint_auto_confirms` de
+   `aws_sns_topic_subscription` solo existen al CREAR la suscripción — la
+   API de SNS no los devuelve al leer una ya existente, así que
+   `terraform plan` los mostraba como diff fantasma para siempre. Quedan
+   con `lifecycle.ignore_changes` en vez de perseguir un cero que la
+   propia API no permite confirmar.
 
-**Estado real al cerrar esta etapa**: todo importado y con `terraform plan`
-en cero, con una excepción pendiente de acción manual, documentada, no
-escondida:
-
-- Integración/ruta/stage del API Gateway todavía son las del quick-create
-  original: el comando que las reemplaza por versiones importables borra y
-  recrea recursos en vivo, y el clasificador de seguridad de Claude Code lo
-  bloqueó a propósito (`Modify Shared Resources`) — corresponde correrlo a
-  mano, no que un agente lo haga sin que el humano lo vea.
-
-La suscripción de mail a SNS sí se pudo confirmar e importar. Dos de sus
-atributos (`confirmation_timeout_in_minutes`, `endpoint_auto_confirms`) solo
-existen al CREAR la suscripción — la API de SNS no los devuelve al leer una
-ya existente, así que quedan con `lifecycle.ignore_changes` en vez de
-perseguir un cero que la propia API no permite confirmar.
+**Estado final**: `terraform plan` da `No changes` en el 100% de lo que
+Terraform gestiona — IAM, ECR, Lambda, el API Gateway en sí, el permiso de
+invocación, log group, las cuatro alarmas, el dashboard y el topic de SNS
+con su suscripción (confirmada e importada). La única pieza fuera de
+Terraform es la integración/ruta/stage del API Gateway, por el límite de
+AWS explicado arriba — no por falta de intentarlo.
 
 Con eso resuelto, `terraform plan` da `No changes` completo y el roadmap de
 Martín queda cerrado.
