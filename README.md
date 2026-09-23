@@ -521,18 +521,20 @@ prolijo (ver `locals.tf`).
    ASCII.
 
 **Estado real al cerrar esta etapa**: todo importado y con `terraform plan`
-en cero **excepto** dos cosas que dependen de una acción manual y quedan
-documentadas, no escondidas:
+en cero, con una excepción pendiente de acción manual, documentada, no
+escondida:
 
-- La suscripción de mail a SNS sigue sin confirmar
-  (`SubscriptionsConfirmed: 0`) — hace falta clickear el link que mandó AWS
-  antes de poder importarla (Terraform no puede leer una suscripción
-  `PendingConfirmation`).
 - Integración/ruta/stage del API Gateway todavía son las del quick-create
   original: el comando que las reemplaza por versiones importables borra y
   recrea recursos en vivo, y el clasificador de seguridad de Claude Code lo
   bloqueó a propósito (`Modify Shared Resources`) — corresponde correrlo a
   mano, no que un agente lo haga sin que el humano lo vea.
+
+La suscripción de mail a SNS sí se pudo confirmar e importar. Dos de sus
+atributos (`confirmation_timeout_in_minutes`, `endpoint_auto_confirms`) solo
+existen al CREAR la suscripción — la API de SNS no los devuelve al leer una
+ya existente, así que quedan con `lifecycle.ignore_changes` en vez de
+perseguir un cero que la propia API no permite confirmar.
 
 Con eso resuelto, `terraform plan` da `No changes` completo y el roadmap de
 Martín queda cerrado.
